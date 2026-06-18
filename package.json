@@ -1,6 +1,6 @@
 {
   "name": "@orbitnest/js",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "OrbitNest JavaScript/TypeScript SDK for the browser — auth, database, query builder, storage, realtime, edge functions.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

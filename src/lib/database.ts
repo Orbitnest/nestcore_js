@@ -289,6 +289,7 @@ class TableQueryBuilder {
   private _limit?: number;
   private _offset?: number;
   private _columns = '*';
+  private _vectorOrder?: { col: string; vec: string; op: string };
 
   constructor(
     private db: DatabaseClient,
@@ -337,6 +338,28 @@ class TableQueryBuilder {
       throw new Error(`OrbitNest: unsafe text-search config "${config}"`);
     }
     this._filters.push({ col: column, op: 'fts', value: query, ftsType: opts?.type ?? 'websearch', config });
+    return this;
+  }
+
+  /**
+   * Order by vector similarity (pgvector). Returns the nearest rows to
+   * `vector` by the chosen distance metric, closest first.
+   *
+   * ```ts
+   * await client.db.from('documents').nearest('embedding', queryEmbedding, { metric: 'cosine', limit: 5 }).select();
+   * ```
+   *
+   * Requires the `vector` extension (`CREATE EXTENSION IF NOT EXISTS vector`).
+   * @param metric `l2` (default, `<->`), `cosine` (`<=>`), or `ip` (`<#>`).
+   */
+  nearest(column: string, vector: number[], opts?: { metric?: 'l2' | 'cosine' | 'ip'; limit?: number }): this {
+    this.ident(column);
+    if (!Array.isArray(vector) || !vector.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      throw new Error('OrbitNest: nearest() vector must be an array of finite numbers');
+    }
+    const op = opts?.metric === 'cosine' ? '<=>' : opts?.metric === 'ip' ? '<#>' : '<->';
+    this._vectorOrder = { col: column, vec: `[${vector.join(',')}]`, op };
+    if (opts?.limit != null) this._limit = opts.limit;
     return this;
   }
 
@@ -413,8 +436,13 @@ class TableQueryBuilder {
       }
     }
     if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
-    if (this._orders.length)
-      sql += ` ORDER BY ${this._orders.map((o) => `${this.ident(o.col)} ${o.asc ? 'ASC' : 'DESC'}`).join(', ')}`;
+    const orderClauses: string[] = [];
+    if (this._vectorOrder) {
+      // vector bound as a param, cast to ::vector — values are never interpolated.
+      orderClauses.push(`${this.ident(this._vectorOrder.col)} ${this._vectorOrder.op} $${params.push(this._vectorOrder.vec)}::vector`);
+    }
+    for (const o of this._orders) orderClauses.push(`${this.ident(o.col)} ${o.asc ? 'ASC' : 'DESC'}`);
+    if (orderClauses.length) sql += ` ORDER BY ${orderClauses.join(', ')}`;
     if (this._limit != null) sql += ` LIMIT $${params.push(this._limit)}`;
     if (this._offset != null) sql += ` OFFSET $${params.push(this._offset)}`;
     return { sql, params };
