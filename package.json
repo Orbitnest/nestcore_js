@@ -1,0 +1,48 @@
+{
+  "name": "@orbitnest/js",
+  "version": "0.1.0",
+  "description": "OrbitNest JavaScript/TypeScript SDK for the browser — auth, database, query builder, storage, realtime, edge functions.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "unpkg": "dist/index.global.js",
+  "jsdelivr": "dist/index.global.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "orbitnest",
+    "sdk",
+    "browser",
+    "supabase-alternative",
+    "database",
+    "auth",
+    "realtime",
+    "backend-as-a-service"
+  ],
+  "author": "OrbitNest",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Orbitnest/orbitnest_js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  }
+}
