@@ -20,6 +20,7 @@ export * from './lib/realtime';
 export * from './lib/analytics';
 export { generateTypes, type GenerateTypesOptions } from './lib/typegen';
 export { validatePath, sanitizePath, validateRequired } from './lib/validation';
+export { OrbitNestError, unwrap } from './lib/errors';
 export {
   type StorageAdapter,
   localStorageAdapter,

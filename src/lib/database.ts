@@ -266,7 +266,7 @@ export class DatabaseClient {
 
 const SAFE_IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-type QueryFilter = { col: string; op: string; value: unknown };
+type QueryFilter = { col: string; op: string; value: unknown; ftsType?: string; config?: string };
 
 /**
  * Fluent, Supabase-style query builder. Filters/ordering/pagination compose into
@@ -315,6 +315,30 @@ class TableQueryBuilder {
   ilike(column: string, pattern: string): this { return this.push(column, 'ilike', pattern); }
   in(column: string, values: unknown[]): this { return this.push(column, 'in', values); }
   is(column: string, value: null | boolean): this { return this.push(column, 'is', value); }
+
+  /**
+   * Full-text search on a column using PostgreSQL text search.
+   *
+   * ```ts
+   * await client.db.from('articles').textSearch('body', 'postgres & search').select();
+   * ```
+   *
+   * @param type   `websearch` (default, Google-style operators), `plain`, or `phrase`.
+   * @param config text-search configuration / language (default `english`).
+   */
+  textSearch(
+    column: string,
+    query: string,
+    opts?: { type?: 'websearch' | 'plain' | 'phrase'; config?: string },
+  ): this {
+    this.ident(column);
+    const config = opts?.config ?? 'english';
+    if (!SAFE_IDENT.test(config)) {
+      throw new Error(`OrbitNest: unsafe text-search config "${config}"`);
+    }
+    this._filters.push({ col: column, op: 'fts', value: query, ftsType: opts?.type ?? 'websearch', config });
+    return this;
+  }
 
   private push(column: string, op: string, value: unknown): this {
     this.ident(column);
@@ -375,6 +399,17 @@ class TableQueryBuilder {
           if (f.value === null) where.push(`${col} IS NULL`);
           else where.push(`${col} = $${params.push(f.value)}`);
           break;
+        case 'fts': {
+          // config is validated as a safe identifier in textSearch(); the query
+          // value is always bound as a parameter.
+          const cfg = f.config ?? 'english';
+          const fn =
+            f.ftsType === 'plain' ? 'plainto_tsquery'
+            : f.ftsType === 'phrase' ? 'phraseto_tsquery'
+            : 'websearch_to_tsquery';
+          where.push(`to_tsvector('${cfg}', ${col}::text) @@ ${fn}('${cfg}', $${params.push(f.value)})`);
+          break;
+        }
       }
     }
     if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
