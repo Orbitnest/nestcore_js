@@ -172,6 +172,25 @@ export class AuthClient {
     return result;
   }
 
+  // ─── SMS OTP (phone sign-in; the project must have Twilio configured) ──
+
+  /** Send a one-time code to a phone number (E.164, e.g. `+15555550123`). */
+  async signInWithSms(phone: string): Promise<ApiResult<{ success: boolean; message: string; expires_in: number }>> {
+    return this.client.request(`${this.basePath}/sms/send-otp`, { method: 'POST', body: { phone } });
+  }
+
+  /** Verify a phone OTP and sign in (creates the user on first sign-in). */
+  async verifySmsOtp(phone: string, code: string): Promise<ApiResult<AuthSession>> {
+    const result = await this.client.request<AuthSession>(`${this.basePath}/sms/verify-otp`, {
+      method: 'POST',
+      body: { phone, code },
+    });
+    if (result.data) {
+      this.session = result.data;
+    }
+    return result;
+  }
+
   /**
    * Sign out the current user
    */
