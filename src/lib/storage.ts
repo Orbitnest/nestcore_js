@@ -29,6 +29,27 @@ export interface StorageFile {
   createdAt: string;
 }
 
+/** On-the-fly image transform options for {@link StorageBucket.getPublicUrl}. */
+export interface ImageTransformOptions {
+  width?: number;
+  height?: number;
+  format?: 'webp' | 'jpeg' | 'png' | 'avif';
+  quality?: number;
+  fit?: 'cover' | 'contain' | 'fill' | 'inside' | 'outside';
+}
+
+/** Serialize transform options into a query string (omitting empty values). */
+function buildTransformQuery(t?: ImageTransformOptions): string {
+  if (!t) return '';
+  const p = new URLSearchParams();
+  if (t.width) p.set('width', String(t.width));
+  if (t.height) p.set('height', String(t.height));
+  if (t.format) p.set('format', t.format);
+  if (t.quality) p.set('quality', String(t.quality));
+  if (t.fit) p.set('fit', t.fit);
+  return p.toString();
+}
+
 export interface StorageListItem {
   name: string;
   size: number;
@@ -246,8 +267,16 @@ export class StorageBucket {
    * Get the public URL for a file. Routes through the anonymous public-storage
    * controller mounted at `/api/public/:slug/storage/:bucket/*path` — no
    * Authorization header is required. Use this for files in public buckets.
+   *
+   * Pass `transform` to request an on-the-fly image rendition (resize/format):
+   *
+   * ```ts
+   * storage.from('avatars').getPublicUrl('u/1.png', {
+   *   transform: { width: 128, height: 128, format: 'webp', quality: 80 },
+   * });
+   * ```
    */
-  getPublicUrl(path: string): { data: { publicUrl: string } } {
+  getPublicUrl(path: string, options?: { transform?: ImageTransformOptions }): { data: { publicUrl: string } } {
     // This method is synchronous and can't return an ApiResult error, so a
     // traversal/null-byte attempt throws (it's a caller bug or attack, not a
     // recoverable runtime error).
@@ -260,7 +289,10 @@ export class StorageBucket {
     const projectSlug = this.client.getProjectSlug();
     // Encode each path segment (preserving `/` separators) so the path can't
     // inject URL syntax or traverse outside the bucket.
-    const publicUrl = `${baseUrl}/api/public/${projectSlug}/storage/${this.bucket}/${encodeStoragePath(path)}`;
+    let publicUrl = `${baseUrl}/api/public/${projectSlug}/storage/${this.bucket}/${encodeStoragePath(path)}`;
+
+    const qs = buildTransformQuery(options?.transform);
+    if (qs) publicUrl += `?${qs}`;
 
     return {
       data: { publicUrl },

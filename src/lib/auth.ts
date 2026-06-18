@@ -19,6 +19,28 @@ import type {
 import type { StorageAdapter } from './storage-adapters';
 import { memoryAdapter } from './storage-adapters';
 
+/** Returned by `signIn` when the account has MFA enrolled — complete with `verifyMfa`. */
+export interface MfaChallenge {
+  mfa_required: true;
+  challenge_token: string;
+  factors: Array<{ id: string; type: string }>;
+}
+
+/** An enrolled MFA factor. */
+export interface MfaFactor {
+  id: string;
+  factor_type: string;
+  friendly_name?: string | null;
+  verified: boolean;
+  created_at: string;
+  last_used_at?: string | null;
+}
+
+/** Type guard: did `signIn` return an MFA challenge instead of a session? */
+export function isMfaChallenge(value: unknown): value is MfaChallenge {
+  return !!value && typeof value === 'object' && (value as MfaChallenge).mfa_required === true;
+}
+
 const SESSION_KEY = 'orbitnest.session';
 
 export class AuthClient {
@@ -114,10 +136,15 @@ export class AuthClient {
   }
 
   /**
-   * Sign in with email and password
+   * Sign in with email and password.
+   *
+   * If the account has a verified MFA factor, the response data is an
+   * {@link MfaChallenge} (not a session) — call {@link verifyMfa} with the
+   * `challenge_token` and a TOTP code to finish. Use {@link isMfaChallenge} to
+   * branch.
    */
-  async signIn(credentials: SignInCredentials): Promise<ApiResult<AuthSession>> {
-    const result = await this.client.request<AuthSession>(`${this.basePath}/signin`, {
+  async signIn(credentials: SignInCredentials): Promise<ApiResult<AuthSession | MfaChallenge>> {
+    const result = await this.client.request<AuthSession | MfaChallenge>(`${this.basePath}/signin`, {
       method: 'POST',
       body: {
         email: credentials.email,
@@ -125,10 +152,23 @@ export class AuthClient {
       },
     });
 
+    // Only persist a real session — an MFA challenge isn't one yet.
+    if (result.data && !isMfaChallenge(result.data)) {
+      this.session = result.data as AuthSession;
+    }
+
+    return result;
+  }
+
+  /** Complete an MFA-gated sign-in with the challenge token and a TOTP code. */
+  async verifyMfa(challengeToken: string, code: string): Promise<ApiResult<AuthSession>> {
+    const result = await this.client.request<AuthSession>(`${this.basePath}/verify-mfa`, {
+      method: 'POST',
+      body: { challenge_token: challengeToken, code },
+    });
     if (result.data) {
       this.session = result.data;
     }
-
     return result;
   }
 
@@ -383,6 +423,53 @@ export class AuthClient {
     }
     return this.client.requestWithToken<{ success: boolean }>(
       `${this.basePath}/passkey/devices/${encodeURIComponent(id)}`,
+      this.session.access_token,
+      { method: 'DELETE' },
+    );
+  }
+
+  // ─── MFA (TOTP / authenticator apps) ──────────────────────────────────
+
+  async enrollMfaTotp(
+    friendlyName?: string,
+  ): Promise<ApiResult<{ factor_id: string; secret: string; otpauth_url: string; qr_code: string }>> {
+    if (!this.session?.access_token) {
+      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
+    }
+    return this.client.requestWithToken(
+      `${this.basePath}/mfa/totp/enroll`,
+      this.session.access_token,
+      { method: 'POST', body: { friendly_name: friendlyName } },
+    );
+  }
+
+  async verifyMfaEnrollment(factorId: string, code: string): Promise<ApiResult<{ success: boolean }>> {
+    if (!this.session?.access_token) {
+      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
+    }
+    return this.client.requestWithToken<{ success: boolean }>(
+      `${this.basePath}/mfa/totp/verify`,
+      this.session.access_token,
+      { method: 'POST', body: { factor_id: factorId, code } },
+    );
+  }
+
+  async listMfaFactors(): Promise<ApiResult<MfaFactor[]>> {
+    if (!this.session?.access_token) {
+      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
+    }
+    return this.client.requestWithToken<MfaFactor[]>(
+      `${this.basePath}/mfa/factors`,
+      this.session.access_token,
+    );
+  }
+
+  async unenrollMfa(factorId: string): Promise<ApiResult<{ success: boolean }>> {
+    if (!this.session?.access_token) {
+      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
+    }
+    return this.client.requestWithToken<{ success: boolean }>(
+      `${this.basePath}/mfa/factors/${encodeURIComponent(factorId)}`,
       this.session.access_token,
       { method: 'DELETE' },
     );
