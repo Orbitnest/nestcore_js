@@ -462,14 +462,31 @@ export class AuthClient {
     );
   }
 
-  async verifyMfaEnrollment(factorId: string, code: string): Promise<ApiResult<{ success: boolean }>> {
+  /** Confirm enrollment with the first code. On success returns the user's
+   *  single-use `recovery_codes` (shown once — store them safely). */
+  async verifyMfaEnrollment(
+    factorId: string,
+    code: string,
+  ): Promise<ApiResult<{ success: boolean; recovery_codes: string[] }>> {
     if (!this.session?.access_token) {
       return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
     }
-    return this.client.requestWithToken<{ success: boolean }>(
+    return this.client.requestWithToken<{ success: boolean; recovery_codes: string[] }>(
       `${this.basePath}/mfa/totp/verify`,
       this.session.access_token,
       { method: 'POST', body: { factor_id: factorId, code } },
+    );
+  }
+
+  /** Regenerate the user's MFA recovery codes — returns the new set once. */
+  async regenerateMfaRecoveryCodes(): Promise<ApiResult<{ codes: string[] }>> {
+    if (!this.session?.access_token) {
+      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
+    }
+    return this.client.requestWithToken<{ codes: string[] }>(
+      `${this.basePath}/mfa/recovery-codes`,
+      this.session.access_token,
+      { method: 'POST' },
     );
   }
 
