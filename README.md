@@ -1,21 +1,21 @@
-# @orbitnest/js
+# @orbitneststudio/js
 
 The official **browser/JavaScript SDK** for the [OrbitNest](https://orbitnest.io)
 platform — auth, database, a Supabase-style query builder, storage, realtime,
 and edge functions, for web apps (React, Vue, Svelte, vanilla, …).
 
-This is the client-side counterpart to [`@orbitnest/node`](https://github.com/Orbitnest/orbitnest_node):
+This is the client-side counterpart to [`@orbitneststudio/node`](https://github.com/Orbitnest/orbitnest_node):
 the same API surface, packaged for the browser (ESM, CJS, and a CDN/IIFE bundle),
 with session persistence and no Node-only dependencies.
 
 ```bash
-npm install @orbitnest/js
+npm install @orbitneststudio/js
 ```
 
 Or drop it in over a CDN — the global is `OrbitNest`:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@orbitnest/js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@orbitneststudio/js"></script>
 <script>
   const orbit = OrbitNest.createClient({ apiKey: 'YOUR_ANON_KEY' });
 </script>
@@ -29,7 +29,7 @@ Or drop it in over a CDN — the global is `OrbitNest`:
 ## Quick start
 
 ```ts
-import { createClient, localStorageAdapter } from '@orbitnest/js';
+import { createClient, localStorageAdapter } from '@orbitneststudio/js';
 
 const orbit = createClient({
   apiKey: import.meta.env.VITE_ORBITNEST_ANON_KEY,
@@ -79,7 +79,7 @@ for local dev.
 ### The query builder
 
 `db.from(table)` returns a chainable, **parameterized** builder (every value is
-bound, never interpolated) that mirrors `@orbitnest/node` and Supabase:
+bound, never interpolated) that mirrors `@orbitneststudio/node` and Supabase:
 
 ```ts
 orbit.db.from('users')
@@ -107,7 +107,7 @@ By default the session lives only in memory. Pass a storage adapter to persist
 it:
 
 ```ts
-import { createClient, localStorageAdapter, createMemoryAdapter } from '@orbitnest/js';
+import { createClient, localStorageAdapter, createMemoryAdapter } from '@orbitneststudio/js';
 
 createClient({ apiKey, storage: localStorageAdapter }); // survives refresh
 createClient({ apiKey, storage: createMemoryAdapter() }); // ephemeral (default)
@@ -119,7 +119,7 @@ You can also supply your own adapter — any object with
 `getItem` / `setItem` / `removeItem`:
 
 ```ts
-import type { StorageAdapter } from '@orbitnest/js';
+import type { StorageAdapter } from '@orbitneststudio/js';
 
 const sessionStorageAdapter: StorageAdapter = {
   getItem: (k) => sessionStorage.getItem(k),
@@ -163,7 +163,7 @@ Generate row types from the live schema for end-to-end safety (typically run
 server-side / in a build step, since it needs a service-role key):
 
 ```ts
-import { generateTypes } from '@orbitnest/js';
+import { generateTypes } from '@orbitneststudio/js';
 const ts = await generateTypes(serverClient.db); // → string of TS interfaces + a `Database` map
 ```
 
@@ -177,7 +177,7 @@ const ts = await generateTypes(serverClient.db); // → string of TS interfaces 
 Targets ES2020 and any environment with `fetch`, `WebSocket`, `FormData`, and
 `Blob` (all modern browsers; Node 18+ for isomorphic use). No polyfills needed.
 
-`@orbitnest/node` vs `@orbitnest/js`: the Node SDK additionally ships a
+`@orbitneststudio/node` vs `@orbitneststudio/js`: the Node SDK additionally ships a
 filesystem-backed **migration runner**; the web SDK omits it (no filesystem in
 the browser) and adds **session persistence adapters**. Everything else is the
 same API.

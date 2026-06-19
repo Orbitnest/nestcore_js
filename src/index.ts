@@ -109,7 +109,7 @@ export interface OrbitNestClient {
  * service-role key.
  *
  * ```ts
- * import { createClient, localStorageAdapter } from '@orbitnest/js';
+ * import { createClient, localStorageAdapter } from '@orbitneststudio/js';
  *
  * const orbit = createClient({
  *   apiKey: import.meta.env.VITE_ORBITNEST_ANON_KEY,

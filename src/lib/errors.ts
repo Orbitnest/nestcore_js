@@ -24,7 +24,7 @@ export class OrbitNestError extends Error {
  * non-throwing behavior of the SDK.
  *
  * ```ts
- * import { unwrap } from '@orbitnest/js';
+ * import { unwrap } from '@orbitneststudio/js';
  *
  * try {
  *   const { rows } = unwrap(await orbit.db.from('posts').select());
