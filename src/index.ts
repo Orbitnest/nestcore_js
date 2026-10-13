@@ -71,9 +71,12 @@ function decodeProjectSlugFromJwt(token: string): string {
 export interface OrbitNestClient {
   db: DatabaseClient;
   functions: FunctionsClient;
+  /** @deprecated Needs a Studio admin token; every call returns an `ADMIN_ONLY` error. */
   jobs: JobsClient;
   auth: AuthClient;
+  /** @deprecated Needs a Studio admin token; every call returns an `ADMIN_ONLY` error. */
   logs: LoggingClient;
+  /** @deprecated Needs a Studio admin token; every call returns an `ADMIN_ONLY` error. */
   env: EnvironmentClient;
   storage: StorageClient;
   analytics: AnalyticsClient;
@@ -138,10 +141,25 @@ export function createClient(
   // passed to RealtimeClient and sent on the WS handshake via subprotocol (the
   // only credential channel a browser WebSocket allows).
   const wsUrl = `${baseUrl.replace(/^http/, 'ws')}/realtime/v1/ws?project=${encodeURIComponent(projectSlug)}`;
+  const auth = new AuthClient(httpClient, { storage: config.storage });
+  // Data, storage and function calls run as the signed-in user (RLS
+  // `auth.uid()`), refreshing the access token shortly before it expires.
+  httpClient.setAccessTokenProvider(() => auth.getAccessToken(), (stale) => auth.refreshAccessToken(stale));
+
+  // An explicit realtimeOptions.userJwt wins; otherwise realtime follows auth.
+  const followAuth = !config.realtimeOptions?.userJwt;
   const realtimeClient = new RealtimeClient(wsUrl, {
     ...config.realtimeOptions,
     apiKey: config.apiKey,
+    ...(followAuth
+      ? {
+          accessToken: () => auth.getAccessToken(),
+          // A refresh notifies onAuthStateChange → setAuth, which reconnects.
+          onAuthRejected: (stale: string) => { void auth.refreshAccessToken(stale); },
+        }
+      : {}),
   });
+  if (followAuth) auth.onAuthStateChange((s) => realtimeClient.setAuth(s?.access_token ?? null));
 
   const db = new DatabaseClient(httpClient);
 
@@ -149,7 +167,7 @@ export function createClient(
     db,
     functions: new FunctionsClient(httpClient),
     jobs: new JobsClient(httpClient),
-    auth: new AuthClient(httpClient, { storage: config.storage }),
+    auth,
     logs: new LoggingClient(httpClient),
     env: new EnvironmentClient(httpClient),
     storage: new StorageClient(httpClient),

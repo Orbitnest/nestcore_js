@@ -1,4 +1,4 @@
-import type { HttpClient } from './client';
+import { adminOnlyError, type HttpClient } from './client';
 import type { ApiResult } from '../types';
 
 export interface LogEntry {
@@ -19,73 +19,47 @@ export interface LogQueryOptions {
   source?: string;
 }
 
+/**
+ * @deprecated Not usable with a project API key: these routes need a Studio
+ * admin token. Every method resolves to an `ADMIN_ONLY` error without calling
+ * the API. Use OrbitNest Studio, the CLI or the MCP server instead.
+ */
 export class LoggingClient {
   constructor(private client: HttpClient) {}
-
-  private get basePath(): string {
-    return `/api/projects/${this.client.getProjectSlug()}/logs`;
-  }
 
   /**
    * Get all logs
    */
   async getLogs(options: LogQueryOptions = {}): Promise<ApiResult<LogEntry[]>> {
-    const params = new URLSearchParams();
-    if (options.level) params.set('level', options.level);
-    if (options.since) params.set('since', options.since.toISOString());
-    if (options.until) params.set('until', options.until.toISOString());
-    if (options.limit) params.set('limit', options.limit.toString());
-    if (options.offset) params.set('offset', options.offset.toString());
-    if (options.source) params.set('source', options.source);
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<LogEntry[]>(`${this.basePath}${query}`);
+    return adminOnlyError('client.logs');
   }
 
   /**
    * Get database logs
    */
   async getDatabaseLogs(options: LogQueryOptions = {}): Promise<ApiResult<LogEntry[]>> {
-    const params = new URLSearchParams();
-    if (options.limit) params.set('limit', options.limit.toString());
-    if (options.since) params.set('since', options.since.toISOString());
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<LogEntry[]>(`${this.basePath}/database${query}`);
+    return adminOnlyError('client.logs');
   }
 
   /**
    * Get slow query logs
    */
   async getSlowQueryLogs(options: LogQueryOptions = {}): Promise<ApiResult<LogEntry[]>> {
-    const params = new URLSearchParams();
-    if (options.limit) params.set('limit', options.limit.toString());
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<LogEntry[]>(`${this.basePath}/database/slow${query}`);
+    return adminOnlyError('client.logs');
   }
 
   /**
    * Get auth logs
    */
   async getAuthLogs(options: LogQueryOptions = {}): Promise<ApiResult<LogEntry[]>> {
-    const params = new URLSearchParams();
-    if (options.limit) params.set('limit', options.limit.toString());
-    if (options.since) params.set('since', options.since.toISOString());
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<LogEntry[]>(`${this.basePath}/auth${query}`);
+    return adminOnlyError('client.logs');
   }
 
   /**
    * Get auth failure logs
    */
   async getAuthFailures(options: LogQueryOptions = {}): Promise<ApiResult<LogEntry[]>> {
-    const params = new URLSearchParams();
-    if (options.limit) params.set('limit', options.limit.toString());
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<LogEntry[]>(`${this.basePath}/auth/failures${query}`);
+    return adminOnlyError('client.logs');
   }
 
   /**
@@ -95,15 +69,6 @@ export class LoggingClient {
     functionName?: string,
     options: LogQueryOptions = {}
   ): Promise<ApiResult<LogEntry[]>> {
-    const params = new URLSearchParams();
-    if (options.limit) params.set('limit', options.limit.toString());
-    if (options.since) params.set('since', options.since.toISOString());
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    const path = functionName
-      ? `${this.basePath}/edge-functions/${encodeURIComponent(functionName)}`
-      : `${this.basePath}/edge-functions`;
-
-    return this.client.request<LogEntry[]>(`${path}${query}`);
+    return adminOnlyError('client.logs');
   }
 }

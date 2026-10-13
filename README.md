@@ -71,9 +71,7 @@ for local dev.
 | `storage` | `storage.from(bucket)` → `upload` / `download` / `list` / `remove` / `getPublicUrl`. |
 | `realtime` / `channel()` | Postgres change subscriptions, broadcast, and presence over WebSocket. |
 | `functions` | `functions.invoke(name, { body })` to call edge functions. |
-| `jobs` | Create / list / trigger scheduled (cron) jobs. |
-| `env` | Read/write project environment variables. |
-| `logs` | Query logs (app, database, slow queries, auth, edge functions). |
+| `jobs`, `env`, `logs` | Deprecated: these need a Studio admin token, so with a project key every call returns an `ADMIN_ONLY` error. Use Studio, the CLI or the MCP server. |
 | `analytics` | `identify` / `track` / `screen` / `crash`, with batched ingest. |
 
 ### The query builder
@@ -103,18 +101,20 @@ SDK never throws on API errors).
 
 ## Session persistence
 
-By default the session lives only in memory. Pass a storage adapter to persist
-it:
+By default the session lives only in that client instance (safe for SSR: one
+client per request never sees another request's user). Pass a storage adapter
+to persist it:
 
 ```ts
 import { createClient, localStorageAdapter, createMemoryAdapter } from '@orbitneststudio/js';
 
 createClient({ apiKey, storage: localStorageAdapter }); // survives refresh
-createClient({ apiKey, storage: createMemoryAdapter() }); // ephemeral (default)
+createClient({ apiKey, storage: createMemoryAdapter() }); // in-memory store you can share deliberately
 ```
 
-`localStorageAdapter` automatically falls back to in-memory when `localStorage`
-is unavailable (SSR, private mode, quota errors), so it's always safe to pass.
+`localStorageAdapter` persists nothing when `localStorage` is unavailable (SSR,
+private mode), so it's always safe to pass — on a server each client keeps its
+own session.
 You can also supply your own adapter — any object with
 `getItem` / `setItem` / `removeItem`:
 

@@ -44,6 +44,8 @@ export interface AnalyticsOptions {
 const MAX_BATCH_SIZE_CAP = 500;
 const DEFAULT_BATCH_SIZE = 50;
 const DEFAULT_FLUSH_INTERVAL = 5000;
+/** Cap on events kept for retry while the API is unreachable. */
+const MAX_QUEUE = 1000;
 
 // Persisted identity keys. In a browser the SDK is re-instantiated on every full
 // page load, so generating a fresh anonymous_id per instance would count the same
@@ -153,6 +155,15 @@ export class AnalyticsClient {
     this.appVersion = options.appVersion;
     this.flushInterval = options.flushInterval ?? DEFAULT_FLUSH_INTERVAL;
     this.maxBatchSize = Math.min(options.maxBatchSize ?? DEFAULT_BATCH_SIZE, MAX_BATCH_SIZE_CAP);
+
+    // Browser: send what's queued when the page is hidden or unloaded, with
+    // keepalive so the request outlives the page.
+    if (typeof window !== 'undefined' && typeof document !== 'undefined' && window.addEventListener) {
+      window.addEventListener('pagehide', () => this.flushInBackground(true));
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') this.flushInBackground(true);
+      });
+    }
   }
 
   identify(userId: string, traits?: Record<string, unknown>): void {
@@ -171,10 +182,16 @@ export class AnalyticsClient {
   crash(error: Error | string, properties?: Record<string, unknown>): void {
     const msg = error instanceof Error ? error.message : error;
     const stack = error instanceof Error ? error.stack : undefined;
-    this.enqueue('crash', { error: msg, ...(stack ? { stack } : {}), ...properties });
+    // Field names the crash grouper reads (error_type / error_message / stack_trace).
+    this.enqueue('crash', {
+      ...(error instanceof Error ? { error_type: error.name } : {}),
+      error_message: msg,
+      ...(stack ? { stack_trace: stack } : {}),
+      ...properties,
+    });
   }
 
-  async flush(): Promise<ApiResult<IngestionResult>> {
+  async flush(keepalive = false): Promise<ApiResult<IngestionResult>> {
     this.clearFlushTimer();
 
     if (this.queue.length === 0) {
@@ -186,9 +203,28 @@ export class AnalyticsClient {
     const result = await this.client.requestForAnalytics<IngestionResult>('/api/analytics/events', {
       method: 'POST',
       body: { events: batch },
+      keepalive,
     });
 
+    // Network errors, timeouts, 429 and 5xx are transient: keep the batch
+    // (oldest first, capped) and try again on the next flush.
+    const status = result.error?.status;
+    if (result.error && (status === undefined || status === 429 || status >= 500)) {
+      this.queue = [...batch, ...this.queue].slice(-MAX_QUEUE);
+      if (!keepalive) this.scheduleFlush();
+    }
+
     return result;
+  }
+
+  /** Flush from a timer/unload. Dropped events are logged, never thrown. */
+  private flushInBackground(keepalive = false): void {
+    void this.flush(keepalive).then((r) => {
+      const status = r.error?.status;
+      if (r.error && status !== undefined && status !== 429 && status < 500) {
+        console.warn(`[orbitnest] analytics events rejected (${status}): ${r.error.message}`);
+      }
+    });
   }
 
   private enqueue(event: string, properties?: Record<string, unknown>): void {
@@ -207,7 +243,7 @@ export class AnalyticsClient {
     this.queue.push(entry);
 
     if (this.queue.length >= this.maxBatchSize) {
-      void this.flush();
+      this.flushInBackground();
     } else {
       this.scheduleFlush();
     }
@@ -217,7 +253,7 @@ export class AnalyticsClient {
     if (this.flushTimer !== null) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      void this.flush();
+      this.flushInBackground();
     }, this.flushInterval);
   }
 

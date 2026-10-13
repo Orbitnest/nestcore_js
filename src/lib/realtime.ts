@@ -135,7 +135,8 @@ export class PresenceManager {
 export class RealtimeChannel {
   private handlers: ChannelHandler[] = [];
   private statusCb?: StatusCallback;
-  private subscribed = false;
+  /** Set by subscribe(); only joined channels hold server subscriptions. */
+  _joined = false;
 
   /** Presence API for this channel. */
   readonly presence: PresenceManager;
@@ -172,6 +173,7 @@ export class RealtimeChannel {
    */
   subscribe(cb?: StatusCallback): this {
     this.statusCb = cb;
+    this._joined = true;
     this.client['registerChannel'](this);
     return this;
   }
@@ -192,29 +194,41 @@ export class RealtimeChannel {
 
   /** Called by RealtimeClient when the WS is ready — sends subscribe messages. */
   _activate(ws: WebSocketLike): void {
-    for (const h of this.handlers) {
-      if (h.type === 'postgres_changes') {
-        const opts = h.opts as PgChangesFilter;
-        const schema = opts.schema ?? 'public';
-        const events = normaliseEvents(opts.event);
-        ws.send(JSON.stringify({
-          id: `${this.name}-${Math.random().toString(36).slice(2)}`,
-          type: 'subscribe',
-          channel: `table:${schema}.${opts.table}`,
-          events,
-          filter: opts.filter,
-        }));
-      } else if (h.type === 'broadcast') {
-        // Subscribe to the broadcast channel (no DB trigger needed)
-        ws.send(JSON.stringify({
-          id: `${this.name}-bc-${Math.random().toString(36).slice(2)}`,
-          type: 'subscribe',
-          channel: `broadcast:${this.name}`,
-        }));
-      }
+    for (const key of this._tableKeys()) {
+      const [schema, table] = splitTableKey(key);
+      this.client['syncTable'](ws, schema, table);
     }
-    this.subscribed = true;
+    if (this.handlers.some((h) => h.type === 'broadcast')) {
+      // Subscribe to the broadcast channel (no DB trigger needed)
+      ws.send(JSON.stringify({
+        id: `${this.name}-bc-${Math.random().toString(36).slice(2)}`,
+        type: 'subscribe',
+        channel: `broadcast:${this.name}`,
+      }));
+    }
     this.statusCb?.('connected');
+  }
+
+  /** `schema.table` keys this channel listens on (empty unless joined). */
+  _tableKeys(): string[] {
+    if (!this._joined) return [];
+    const keys = this.handlers
+      .filter((h) => h.type === 'postgres_changes')
+      .map((h) => `${(h.opts as PgChangesFilter).schema ?? 'public'}.${(h.opts as PgChangesFilter).table}`);
+    return [...new Set(keys)];
+  }
+
+  /** Postgres handler options on one table (empty unless joined). */
+  _tableHandlers(schema: string, table: string): PgChangesFilter[] {
+    if (!this._joined) return [];
+    return this.handlers
+      .filter((h) => h.type === 'postgres_changes')
+      .map((h) => h.opts as PgChangesFilter)
+      .filter((o) => (o.schema ?? 'public') === schema && o.table === table);
+  }
+
+  _hasBroadcast(): boolean {
+    return this.handlers.some((h) => h.type === 'broadcast');
   }
 
   _setStatus(status: RealtimeStatus, err?: Error): void {
@@ -239,6 +253,9 @@ export class RealtimeChannel {
         if (!events.includes(msg.op) && !events.includes('*')) continue;
         if (opts.table && opts.table !== msg.table) continue;
         if (opts.schema && opts.schema !== msg.schema) continue;
+        // The server keeps one subscription per table, so re-check this
+        // handler's own filter before delivering.
+        if (!matchesFilter(msg.op === 'DELETE' ? msg.old : msg.new, opts.filter)) continue;
         (h.callback as PgCallback)(payload);
       }
     } else if (msg.type === 'broadcast') {
@@ -263,6 +280,16 @@ export interface RealtimeOptions {
   WebSocket?: WebSocketConstructor;
   /** Optional project-user JWT for RLS-scoped subscriptions. */
   userJwt?: string;
+  /**
+   * Resolves the signed-in user's JWT before each connect (takes precedence
+   * over `userJwt`). `createClient` wires this to `auth`.
+   */
+  accessToken?: () => Promise<string | null>;
+  /**
+   * Called once when the server rejects the socket's user JWT (close 4001),
+   * e.g. to refresh the session; a new token arrives through `setAuth`.
+   */
+  onAuthRejected?: (staleToken: string) => void;
   /**
    * Project API key. Sent on the handshake via a WS subprotocol token and an
    * Authorization header — never in the URL query string (it is a credential
@@ -311,6 +338,11 @@ export class RealtimeClient {
   private shouldReconnect = true;
   private connectPromise: Promise<void> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** User JWT the current socket was opened with. */
+  private socketJwt: string | undefined;
+  private authChanged = false;
+  /** onAuthRejected already fired since the last accepted connect (no refresh loop). */
+  private authRetried = false;
 
   constructor(
     private readonly url: string,
@@ -323,6 +355,21 @@ export class RealtimeClient {
       this.channels.set(name, new RealtimeChannel(name, this));
     }
     return this.channels.get(name)!;
+  }
+
+  /**
+   * Set the user JWT for RLS-scoped events. Re-opens the socket when it
+   * differs from the one in use. `createClient` calls this on every auth change.
+   */
+  setAuth(token: string | null): void {
+    if (!this.options.accessToken) this.options.userJwt = token ?? undefined;
+    if ((token ?? undefined) === this.socketJwt || !this.ws) return;
+    if (this.ws.readyState === CONNECTING) {
+      this.authChanged = true; // re-open once the in-flight connect finishes
+      return;
+    }
+    // Open, or closed (e.g. 4001 for an expired JWT): connect with the new one.
+    this.reopen();
   }
 
   /** Tear down all channels and close the WebSocket. */
@@ -343,7 +390,7 @@ export class RealtimeClient {
     if (this.connectPromise) return this.connectPromise;
     if (this.ws?.readyState === OPEN) return Promise.resolve();
 
-    this.connectPromise = new Promise<void>((resolve, reject) => {
+    this.connectPromise = this.resolveUserJwt().then((userJwt) => new Promise<void>((resolve, reject) => {
       const WS: WebSocketConstructor =
         this.options.WebSocket ?? (globalThis as any).WebSocket;
 
@@ -357,8 +404,9 @@ export class RealtimeClient {
       }
 
       const protocols: string[] = ['orbitnest-realtime-v1'];
-      if (this.options.userJwt) {
-        protocols.push(`orbitnest.user-jwt.${this.options.userJwt}`);
+      this.socketJwt = userJwt;
+      if (userJwt) {
+        protocols.push(`orbitnest.user-jwt.${userJwt}`);
       }
       // Carry the project API key on the handshake instead of in the URL query
       // string (which leaks into proxy/CDN access logs and browser history).
@@ -377,9 +425,14 @@ export class RealtimeClient {
       ws.onopen = () => {
         this.reconnectDelay = BASE_RECONNECT_DELAY_MS;
         this.connectPromise = null;
-        // Activate all pending channels
-        for (const ch of this.channels.values()) ch._activate(ws);
         resolve();
+        if (this.authChanged) {
+          this.authChanged = false;
+          this.reopen();
+          return;
+        }
+        // Activate all joined channels
+        for (const ch of this.channels.values()) if (ch._joined) ch._activate(ws);
       };
 
       ws.onmessage = (ev: any) => {
@@ -406,6 +459,12 @@ export class RealtimeClient {
         if (code === 1000 || code === 1001 || code === 4001) {
           this.shouldReconnect = false;
         }
+        // Rejected user JWT (expired/revoked/clock skew): refresh once; the new
+        // token reopens the socket via setAuth.
+        if (code === 4001 && this.socketJwt && !this.authRetried && this.options.onAuthRejected) {
+          this.authRetried = true;
+          this.options.onAuthRejected(this.socketJwt);
+        }
 
         if (this.shouldReconnect) {
           // If the server closed us for rate limiting / policy violation, jump to
@@ -431,21 +490,68 @@ export class RealtimeClient {
       };
 
       this.ws = ws;
-    });
+    }));
 
     return this.connectPromise;
+  }
+
+  private async resolveUserJwt(): Promise<string | undefined> {
+    if (!this.options.accessToken) return this.options.userJwt;
+    try {
+      return (await this.options.accessToken()) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Close the socket silently and open a new one (picks up the current JWT). */
+  private reopen(): void {
+    const ws = this.ws;
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.onmessage = null;
+      ws.close(1000, 'auth changed');
+    }
+    this.ws = null;
+    this.connectPromise = null;
+    if ([...this.channels.values()].some((c) => c._joined)) {
+      this.shouldReconnect = true;
+      this.connect().catch(() => {});
+    }
+  }
+
+  /**
+   * The server keeps one subscription per table per socket (last subscribe
+   * wins), so send the union of events of every handler on the table, and a
+   * filter only when they all share the same one. Handlers re-check their own
+   * filters client-side.
+   */
+  private syncTable(ws: WebSocketLike, schema: string, table: string): void {
+    const opts = [...this.channels.values()].flatMap((c) => c._tableHandlers(schema, table));
+    if (opts.length === 0) return;
+    const events = [...new Set(opts.flatMap((o) => normaliseEvents(o.event)))];
+    const sameFilter = new Set(opts.map((o) => JSON.stringify(o.filter ?? null))).size === 1;
+    ws.send(JSON.stringify({
+      id: `rt-${Math.random().toString(36).slice(2)}`,
+      type: 'subscribe',
+      channel: `table:${schema}.${table}`,
+      events,
+      filter: sameFilter ? opts[0].filter : undefined,
+    }));
   }
 
   private reconnect(): void {
     this.reconnectTimer = null;
     this.connectPromise = null;
     this.ws = null;
-    if (this.shouldReconnect && this.channels.size > 0) {
+    if (this.shouldReconnect && [...this.channels.values()].some((c) => c._joined)) {
       this.connect().catch(() => {});
     }
   }
 
   private route(msg: Record<string, any>): void {
+    if (msg.type === 'system' && msg.event === 'connected') this.authRetried = false;
     if (msg.type === 'db_event') {
       // Match by the full channel name stored in the channel instance
       for (const ch of this.channels.values()) {
@@ -470,26 +576,43 @@ export class RealtimeClient {
 
   private registerChannel(ch: RealtimeChannel): void {
     this.channels.set(ch.channelName, ch);
+    // A previous disconnect() / last-channel close disabled reconnects.
+    this.shouldReconnect = true;
     ch._setStatus('connecting');
-    this.connect()
-      .then(() => {
-        if (this.ws?.readyState === OPEN) ch._activate(this.ws!);
-      })
-      .catch((err) => ch._setStatus('error', err));
+    // An open socket activates now; otherwise onopen activates every joined
+    // channel (activating in both places sent duplicate subscribes).
+    if (this.ws?.readyState === OPEN) {
+      ch._activate(this.ws);
+      return;
+    }
+    this.connect().catch((err) => ch._setStatus('error', err));
   }
 
   private async unregisterChannel(name: string): Promise<void> {
     const ch = this.channels.get(name);
     if (!ch) return;
-    if (this.ws?.readyState === OPEN) {
-      this.ws.send(JSON.stringify({
+    // Server channel names this channel used, before it leaves the map.
+    const tableKeys = ch._tableKeys();
+    ch._joined = false;
+    this.channels.delete(name);
+
+    const ws = this.ws;
+    if (ws?.readyState === OPEN) {
+      const unsubscribe = (channel: string) => ws.send(JSON.stringify({
         id: `unsub-${Math.random().toString(36).slice(2)}`,
         type: 'unsubscribe',
-        channel: name,
+        channel,
       }));
+      for (const key of tableKeys) {
+        const [schema, table] = splitTableKey(key);
+        const stillUsed = [...this.channels.values()].some((c) => c._tableHandlers(schema, table).length > 0);
+        // Another channel still listens on this table: re-send its subscription.
+        if (stillUsed) this.syncTable(ws, schema, table);
+        else unsubscribe(`table:${key}`);
+      }
+      if (ch._hasBroadcast()) unsubscribe(`broadcast:${name}`);
     }
-    this.channels.delete(name);
-    if (this.channels.size === 0) {
+    if (![...this.channels.values()].some((c) => c._joined)) {
       this.ws?.close(1000, 'no channels');
     }
   }
@@ -521,13 +644,13 @@ export class RealtimeClient {
   }
 
   private sendPresenceUntrack(channelName: string): void {
-    if (this.ws?.readyState === OPEN) {
-      this.ws.send(JSON.stringify({
-        id: `pu-${Math.random().toString(36).slice(2)}`,
-        type: 'unsubscribe',
-        channel: `broadcast:${channelName}`,
-      }));
-    }
+    if (this.ws?.readyState !== OPEN) return;
+    // Drops presence only; the broadcast subscription stays. No ack is sent.
+    this.ws.send(JSON.stringify({
+      id: `pu-${Math.random().toString(36).slice(2)}`,
+      type: 'presence.untrack',
+      channel: `broadcast:${channelName}`,
+    }));
   }
 }
 
@@ -535,5 +658,32 @@ export class RealtimeClient {
 
 function normaliseEvents(event: PgEvent | PgEvent[]): string[] {
   if (event === '*') return ['INSERT', 'UPDATE', 'DELETE'];
-  return Array.isArray(event) ? event : [event];
+  const list = Array.isArray(event) ? event : [event];
+  return list.includes('*') ? ['INSERT', 'UPDATE', 'DELETE'] : list;
+}
+
+function splitTableKey(key: string): [string, string] {
+  const dot = key.indexOf('.');
+  return [key.slice(0, dot), key.slice(dot + 1)];
+}
+
+/** Same semantics as the gateway's filter (loose equality, SQL LIKE). */
+function matchesFilter(
+  row: Record<string, unknown> | undefined,
+  filter: Record<string, FilterValue> | undefined,
+): boolean {
+  if (!filter || !row) return true;
+  for (const [col, c] of Object.entries(filter)) {
+    const v = row[col] as any;
+    if (c.eq !== undefined && v != c.eq) return false;
+    if (c.neq !== undefined && v == c.neq) return false;
+    if (c.in !== undefined && !c.in.some((x) => x == v)) return false;
+    if (c.gt !== undefined && !(v > c.gt)) return false;
+    if (c.lt !== undefined && !(v < c.lt)) return false;
+    if (c.like !== undefined) {
+      const re = c.like.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.');
+      if (!new RegExp(`^${re}$`, 's').test(String(v))) return false;
+    }
+  }
+  return true;
 }

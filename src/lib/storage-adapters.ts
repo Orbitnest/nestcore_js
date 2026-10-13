@@ -1,8 +1,9 @@
 /**
  * Pluggable key/value storage for persisting the auth session across page
  * loads. A browser app typically wants `localStorageAdapter` so a signed-in
- * user stays signed in after a refresh; pass `memoryAdapter` (the default) for
- * ephemeral sessions, SSR, or when you manage tokens yourself.
+ * user stays signed in after a refresh. Without an adapter the session lives
+ * only in that client instance — the right choice for SSR (one client per
+ * request) or when you manage tokens yourself.
  */
 export interface StorageAdapter {
   getItem(key: string): string | null;
@@ -66,6 +67,38 @@ export function createLocalStorageAdapter(): StorageAdapter {
   };
 }
 
-/** Shared singleton adapters for convenient import. */
-export const memoryAdapter: StorageAdapter = createMemoryAdapter();
-export const localStorageAdapter: StorageAdapter = createLocalStorageAdapter();
+/**
+ * Non-persisting adapter: the session lives only in the client instance that
+ * holds it. Shared module-level state here would leak one user's session into
+ * every other client in an SSR process, so this stores nothing.
+ */
+export const memoryAdapter: StorageAdapter = {
+  getItem: () => null,
+  setItem: () => undefined,
+  removeItem: () => undefined,
+};
+
+/**
+ * Browser `localStorage`, resolved on each call. Where `localStorage` is
+ * unavailable (SSR, private mode) it persists nothing, so on a server every
+ * client keeps its session to itself instead of sharing one in-memory store.
+ */
+export const localStorageAdapter: StorageAdapter = {
+  getItem: (k) => {
+    try { return usableLocalStorage()?.getItem(k) ?? null; } catch { return null; }
+  },
+  setItem: (k, v) => {
+    try { usableLocalStorage()?.setItem(k, v); } catch { /* quota / private mode */ }
+  },
+  removeItem: (k) => {
+    try { usableLocalStorage()?.removeItem(k); } catch { /* ignore */ }
+  },
+};
+
+function usableLocalStorage(): Storage | null {
+  try {
+    return (globalThis as { localStorage?: Storage }).localStorage ?? null;
+  } catch {
+    return null;
+  }
+}

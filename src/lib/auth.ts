@@ -42,13 +42,20 @@ export function isMfaChallenge(value: unknown): value is MfaChallenge {
 }
 
 const SESSION_KEY = 'orbitnest.session';
+/** Refresh the access token this many seconds before it expires. */
+const REFRESH_MARGIN_S = 30;
+const NO_SESSION = { data: null, error: { message: 'No active session', code: 'NO_SESSION' } } as const;
 
 export class AuthClient {
   private _session: AuthSession | null = null;
   private readonly storage: StorageAdapter;
   private readonly storageKey: string;
+  private refreshing: Promise<ApiResult<AuthSession>> | null = null;
+  private readonly listeners = new Set<(session: AuthSession | null) => void>();
 
   constructor(private client: HttpClient, options: { storage?: StorageAdapter } = {}) {
+    // memoryAdapter persists nothing: without an adapter the session stays in
+    // this instance only (never shared between SSR requests).
     this.storage = options.storage ?? memoryAdapter;
     // Namespace the persisted session by project so multiple clients on the
     // same origin don't clobber each other.
@@ -70,13 +77,58 @@ export class AuthClient {
     return this._session;
   }
   private set session(value: AuthSession | null) {
-    this._session = value;
+    this._session = withExpiry(value);
     try {
-      if (value) this.storage.setItem(this.storageKey, JSON.stringify(value));
+      if (value) this.storage.setItem(this.storageKey, JSON.stringify(this._session));
       else this.storage.removeItem(this.storageKey);
     } catch {
       /* storage is best-effort */
     }
+    for (const cb of this.listeners) {
+      try { cb(this._session); } catch { /* listener errors must not break auth */ }
+    }
+  }
+
+  /**
+   * Listen for session changes (sign-in, token refresh, sign-out). Returns an
+   * unsubscribe function.
+   */
+  onAuthStateChange(callback: (session: AuthSession | null) => void): () => void {
+    this.listeners.add(callback);
+    return () => { this.listeners.delete(callback); };
+  }
+
+  /**
+   * The current access token, refreshed first when it is about to expire.
+   * Returns null when signed out or when the server rejected the refresh. A
+   * transient refresh failure keeps the old token, so the request fails with
+   * 401 instead of silently running as the anonymous role.
+   */
+  async getAccessToken(): Promise<string | null> {
+    const s = this.session;
+    if (!s?.access_token) return null;
+    if (s.expires_at && s.expires_at - REFRESH_MARGIN_S <= Date.now() / 1000) {
+      const refreshed = await this.refreshSession();
+      return refreshed.data?.access_token ?? this.session?.access_token ?? null;
+    }
+    return s.access_token;
+  }
+
+  /**
+   * Called after the API rejected `staleToken` (401): refresh once and return
+   * the new access token, or null when the session can't be renewed. Calls
+   * that raced an earlier refresh just get the current token.
+   */
+  async refreshAccessToken(staleToken: string): Promise<string | null> {
+    const current = this.session?.access_token;
+    if (!current) return null;
+    if (current !== staleToken) return current;
+    return (await this.refreshSession()).data?.access_token ?? null;
+  }
+
+  private async withToken<T>(fn: (token: string) => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
+    const token = await this.getAccessToken();
+    return token ? fn(token) : NO_SESSION;
   }
 
   private get basePath(): string {
@@ -102,7 +154,7 @@ export class AuthClient {
    * This sends an OTP to the user's email for verification
    */
   async signUp(credentials: SignUpCredentials): Promise<ApiResult<{ success: boolean; message: string; email: string; expires_in: number }>> {
-    const result = await this.client.request<{ success: boolean; message: string; email: string; expires_in: number }>(`${this.basePath}/signup`, {
+    const result = await this.client.requestPublic<{ success: boolean; message: string; email: string; expires_in: number }>(`${this.basePath}/signup`, {
       method: 'POST',
       body: {
         email: credentials.email,
@@ -120,7 +172,7 @@ export class AuthClient {
    * This verifies the OTP and creates the user account
    */
   async verifySignUp(options: { email: string; code: string }): Promise<ApiResult<AuthSession>> {
-    const result = await this.client.request<AuthSession>(`${this.basePath}/verify-signup`, {
+    const result = await this.client.requestPublic<AuthSession>(`${this.basePath}/verify-signup`, {
       method: 'POST',
       body: {
         email: options.email,
@@ -144,7 +196,7 @@ export class AuthClient {
    * branch.
    */
   async signIn(credentials: SignInCredentials): Promise<ApiResult<AuthSession | MfaChallenge>> {
-    const result = await this.client.request<AuthSession | MfaChallenge>(`${this.basePath}/signin`, {
+    const result = await this.client.requestPublic<AuthSession | MfaChallenge>(`${this.basePath}/signin`, {
       method: 'POST',
       body: {
         email: credentials.email,
@@ -162,7 +214,7 @@ export class AuthClient {
 
   /** Complete an MFA-gated sign-in with the challenge token and a TOTP code. */
   async verifyMfa(challengeToken: string, code: string): Promise<ApiResult<AuthSession>> {
-    const result = await this.client.request<AuthSession>(`${this.basePath}/verify-mfa`, {
+    const result = await this.client.requestPublic<AuthSession>(`${this.basePath}/verify-mfa`, {
       method: 'POST',
       body: { challenge_token: challengeToken, code },
     });
@@ -174,14 +226,20 @@ export class AuthClient {
 
   // ─── SMS OTP (phone sign-in; the project must have Twilio configured) ──
 
-  /** Send a one-time code to a phone number (E.164, e.g. `+15555550123`). */
+  /**
+   * Send a one-time code to a phone number (E.164, e.g. `+15555550123`).
+   * Rate limited per phone: a 429 error has code `SMS_RATE_LIMITED`.
+   */
   async signInWithSms(phone: string): Promise<ApiResult<{ success: boolean; message: string; expires_in: number }>> {
-    return this.client.request(`${this.basePath}/sms/send-otp`, { method: 'POST', body: { phone } });
+    return this.client.requestPublic(`${this.basePath}/sms/send-otp`, { method: 'POST', body: { phone } });
   }
 
-  /** Verify a phone OTP and sign in (creates the user on first sign-in). */
+  /**
+   * Verify a phone OTP and sign in (creates the user on first sign-in).
+   * After 5 wrong codes a 429 error has code `OTP_RATE_LIMITED`.
+   */
   async verifySmsOtp(phone: string, code: string): Promise<ApiResult<AuthSession>> {
-    const result = await this.client.request<AuthSession>(`${this.basePath}/sms/verify-otp`, {
+    const result = await this.client.requestPublic<AuthSession>(`${this.basePath}/sms/verify-otp`, {
       method: 'POST',
       body: { phone, code },
     });
@@ -195,16 +253,10 @@ export class AuthClient {
    * Sign out the current user
    */
   async signOut(): Promise<ApiResult<{ success: boolean }>> {
-    if (!this.session) {
-      return { data: { success: true }, error: null };
-    }
-
-    const result = await this.client.request<{ success: boolean }>(`${this.basePath}/signout`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.session.access_token}`,
-      },
-    });
+    const token = await this.getAccessToken();
+    const result: ApiResult<{ success: boolean }> = token
+      ? await this.client.requestWithToken<{ success: boolean }>(`${this.basePath}/signout`, token, { method: 'POST' })
+      : { data: { success: true }, error: null };
 
     this.session = null;
     return result;
@@ -214,30 +266,36 @@ export class AuthClient {
    * Refresh the current session
    */
   async refreshSession(): Promise<ApiResult<AuthSession>> {
-    if (!this.session?.refresh_token) {
+    const refreshToken = this.session?.refresh_token;
+    if (!refreshToken) {
       return {
         data: null,
         error: { message: 'No refresh token available', code: 'NO_SESSION' },
       };
     }
 
-    const result = await this.client.request<AuthSession>(`${this.basePath}/refresh`, {
-      method: 'POST',
-      body: { refresh_token: this.session.refresh_token },
-    });
-
-    if (result.data) {
-      this.session = result.data;
-    }
-
-    return result;
+    // Refresh tokens rotate: concurrent callers share one request instead of
+    // replaying the same (then revoked) token.
+    this.refreshing ??= this.client
+      .requestPublic<AuthSession>(`${this.basePath}/refresh`, {
+        method: 'POST',
+        body: { refresh_token: refreshToken },
+      })
+      .then((result) => {
+        if (result.data) this.session = result.data;
+        // Rejected refresh token: the session is dead, so stop reporting it.
+        else if (result.error.status === 401) this.session = null;
+        return result;
+      })
+      .finally(() => { this.refreshing = null; });
+    return this.refreshing;
   }
 
   /**
    * Send password recovery email
    */
   async resetPasswordForEmail(options: PasswordRecoveryOptions): Promise<ApiResult<{ success: boolean }>> {
-    return this.client.request<{ success: boolean }>(`${this.basePath}/recover-password`, {
+    return this.client.requestPublic<{ success: boolean }>(`${this.basePath}/recover-password`, {
       method: 'POST',
       body: { email: options.email },
     });
@@ -250,7 +308,7 @@ export class AuthClient {
    * surface (`token`, `password`) readable and map to the server names.
    */
   async updatePassword(options: PasswordResetOptions): Promise<ApiResult<{ success: boolean }>> {
-    return this.client.request<{ success: boolean }>(`${this.basePath}/reset-password`, {
+    return this.client.requestPublic<{ success: boolean }>(`${this.basePath}/reset-password`, {
       method: 'POST',
       body: {
         email: options.email,
@@ -264,57 +322,56 @@ export class AuthClient {
    * Get current user profile
    */
   async getProfile(): Promise<ApiResult<AuthUser>> {
-    if (!this.session?.access_token) {
-      return {
-        data: null,
-        error: { message: 'No active session', code: 'NO_SESSION' },
-      };
-    }
-
-    return this.client.request<AuthUser>(`${this.basePath}/user`, {
-      headers: {
-        Authorization: `Bearer ${this.session.access_token}`,
-      },
-    });
+    return this.withToken((token) => this.client.requestWithToken<AuthUser>(`${this.basePath}/user`, token));
   }
 
   /**
-   * Update user profile
+   * Update the signed-in user. `metadata` is merged into `user_metadata`.
+   * Changing `email` or `password` requires `current_password` (accounts
+   * without a password need a sign-in under 10 minutes old instead); otherwise
+   * the API answers 401 with code `REAUTH_REQUIRED`. A new `email` is not
+   * applied yet: a code is sent to it and the returned user carries
+   * `new_email` until {@link verifyEmailChange} succeeds.
    */
   async updateUser(options: UpdateUserOptions): Promise<ApiResult<AuthUser>> {
-    if (!this.session?.access_token) {
-      return {
-        data: null,
-        error: { message: 'No active session', code: 'NO_SESSION' },
-      };
-    }
+    const { metadata, ...rest } = options;
+    const result = await this.withToken((token) =>
+      this.client.requestWithToken<{ user: AuthUser }>(`${this.basePath}/user`, token, {
+        method: 'PUT',
+        body: metadata === undefined ? rest : { ...rest, data: metadata },
+      }),
+    );
+    if (result.error) return result;
 
-    return this.client.request<AuthUser>(`${this.basePath}/user`, {
-      method: 'PUT',
-      body: options,
-      headers: {
-        Authorization: `Bearer ${this.session.access_token}`,
-      },
-    });
+    const user = result.data.user;
+    if (this.session && user) this.session = { ...this.session, user };
+    return { data: user, error: null };
+  }
+
+  /**
+   * Confirm a pending email change with the code sent to the new address.
+   * The access token keeps the old `email` claim until the next refresh.
+   */
+  async verifyEmailChange(code: string): Promise<ApiResult<AuthUser>> {
+    const result = await this.withToken((token) =>
+      this.client.requestWithToken<{ user: AuthUser }>(`${this.basePath}/user/email/verify`, token, {
+        method: 'POST',
+        body: { code },
+      }),
+    );
+    if (result.error) return result;
+    const user = result.data.user;
+    if (this.session && user) this.session = { ...this.session, user };
+    return { data: user, error: null };
   }
 
   /**
    * Delete current user account
    */
   async deleteUser(): Promise<ApiResult<{ success: boolean }>> {
-    if (!this.session?.access_token) {
-      return {
-        data: null,
-        error: { message: 'No active session', code: 'NO_SESSION' },
-      };
-    }
-
-    const result = await this.client.request<{ success: boolean }>(`${this.basePath}/user`, {
-      method: 'DELETE',
-      headers: {
-        Authorization: `Bearer ${this.session.access_token}`,
-      },
-    });
+    const result = await this.withToken((token) =>
+      this.client.requestWithToken<{ success: boolean }>(`${this.basePath}/user`, token, { method: 'DELETE' }),
+    );
 
     if (result.data) {
       this.session = null;
@@ -338,39 +395,33 @@ export class AuthClient {
   async registerPasskeyOptions(
     opts: { device_name?: string } = {},
   ): Promise<ApiResult<PasskeyRegistrationOptions>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<PasskeyRegistrationOptions>(
+    return this.withToken((token) => this.client.requestWithToken<PasskeyRegistrationOptions>(
       `${this.basePath}/passkey/register/options`,
-      this.session.access_token,
+      token,
       { method: 'POST', body: { device_name: opts.device_name } },
-    );
+    ));
   }
 
   async registerPasskeyVerify(
     input: PasskeyRegisterVerifyOptions,
   ): Promise<ApiResult<PasskeyDevice>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<PasskeyDevice>(
+    return this.withToken((token) => this.client.requestWithToken<PasskeyDevice>(
       `${this.basePath}/passkey/register/verify`,
-      this.session.access_token,
+      token,
       { method: 'POST', body: input },
-    );
+    ));
   }
 
   /**
    * Begin a passkey sign-up ceremony. Creates a passwordless user record
    * server-side and returns attestation options. If an account already
-   * exists with the supplied email AND has a passkey registered, the
-   * server responds with 409 — callers should route to sign-in instead.
+   * exists with the supplied email the server responds with 409 — route
+   * the user to sign-in (then `registerPasskeyOptions` to add a passkey).
    */
   async signUpWithPasskeyOptions(
     opts: PasskeySignUpOptions,
   ): Promise<ApiResult<PasskeyRegistrationOptions>> {
-    return this.client.request<PasskeyRegistrationOptions>(
+    return this.client.requestPublic<PasskeyRegistrationOptions>(
       `${this.basePath}/passkey/signup/options`,
       { method: 'POST', body: opts },
     );
@@ -383,7 +434,7 @@ export class AuthClient {
   async signUpWithPasskeyVerify(
     input: PasskeySignUpVerifyOptions,
   ): Promise<ApiResult<AuthSession>> {
-    const result = await this.client.request<AuthSession>(
+    const result = await this.client.requestPublic<AuthSession>(
       `${this.basePath}/passkey/signup/verify`,
       { method: 'POST', body: input },
     );
@@ -396,7 +447,7 @@ export class AuthClient {
   async signInWithPasskeyOptions(
     opts: { identifier?: string } = {},
   ): Promise<ApiResult<PasskeyAuthenticationOptions>> {
-    return this.client.request<PasskeyAuthenticationOptions>(
+    return this.client.requestPublic<PasskeyAuthenticationOptions>(
       `${this.basePath}/passkey/login/options`,
       { method: 'POST', body: opts.identifier ? { identifier: opts.identifier } : {} },
     );
@@ -405,7 +456,7 @@ export class AuthClient {
   async signInWithPasskeyVerify(
     input: PasskeyAuthenticateVerifyOptions,
   ): Promise<ApiResult<AuthSession>> {
-    const result = await this.client.request<AuthSession>(
+    const result = await this.client.requestPublic<AuthSession>(
       `${this.basePath}/passkey/login/verify`,
       { method: 'POST', body: input },
     );
@@ -416,50 +467,40 @@ export class AuthClient {
   }
 
   async listPasskeys(): Promise<ApiResult<PasskeyDevice[]>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<PasskeyDevice[]>(
+    return this.withToken((token) => this.client.requestWithToken<PasskeyDevice[]>(
       `${this.basePath}/passkey/devices`,
-      this.session.access_token,
-    );
+      token,
+    ));
   }
 
   async renamePasskey(id: string, deviceName: string): Promise<ApiResult<PasskeyDevice>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<PasskeyDevice>(
+    return this.withToken((token) => this.client.requestWithToken<PasskeyDevice>(
       `${this.basePath}/passkey/devices/${encodeURIComponent(id)}`,
-      this.session.access_token,
+      token,
       { method: 'PATCH', body: { device_name: deviceName } },
-    );
+    ));
   }
 
   async revokePasskey(id: string): Promise<ApiResult<{ success: boolean }>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<{ success: boolean }>(
+    return this.withToken((token) => this.client.requestWithToken<{ success: boolean }>(
       `${this.basePath}/passkey/devices/${encodeURIComponent(id)}`,
-      this.session.access_token,
+      token,
       { method: 'DELETE' },
-    );
+    ));
   }
 
   // ─── MFA (TOTP / authenticator apps) ──────────────────────────────────
 
+  /** Begin TOTP enrollment. `code` (TOTP or recovery code) is required when a verified factor already exists. */
   async enrollMfaTotp(
     friendlyName?: string,
+    code?: string,
   ): Promise<ApiResult<{ factor_id: string; secret: string; otpauth_url: string; qr_code: string }>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken(
+    return this.withToken((token) => this.client.requestWithToken<{ factor_id: string; secret: string; otpauth_url: string; qr_code: string }>(
       `${this.basePath}/mfa/totp/enroll`,
-      this.session.access_token,
-      { method: 'POST', body: { friendly_name: friendlyName } },
-    );
+      token,
+      { method: 'POST', body: { friendly_name: friendlyName, code } },
+    ));
   }
 
   /** Confirm enrollment with the first code. On success returns the user's
@@ -468,46 +509,42 @@ export class AuthClient {
     factorId: string,
     code: string,
   ): Promise<ApiResult<{ success: boolean; recovery_codes: string[] }>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<{ success: boolean; recovery_codes: string[] }>(
+    return this.withToken((token) => this.client.requestWithToken<{ success: boolean; recovery_codes: string[] }>(
       `${this.basePath}/mfa/totp/verify`,
-      this.session.access_token,
+      token,
       { method: 'POST', body: { factor_id: factorId, code } },
-    );
+    ));
   }
 
-  /** Regenerate the user's MFA recovery codes — returns the new set once. */
-  async regenerateMfaRecoveryCodes(): Promise<ApiResult<{ codes: string[] }>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<{ codes: string[] }>(
+  /** Regenerate the user's MFA recovery codes — returns the new set once.
+   *  `code` (TOTP or recovery code) is required while a verified factor exists. */
+  async regenerateMfaRecoveryCodes(code?: string): Promise<ApiResult<{ codes: string[] }>> {
+    return this.withToken((token) => this.client.requestWithToken<{ codes: string[] }>(
       `${this.basePath}/mfa/recovery-codes`,
-      this.session.access_token,
-      { method: 'POST' },
-    );
+      token,
+      { method: 'POST', body: { code } },
+    ));
   }
 
   async listMfaFactors(): Promise<ApiResult<MfaFactor[]>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<MfaFactor[]>(
+    return this.withToken((token) => this.client.requestWithToken<MfaFactor[]>(
       `${this.basePath}/mfa/factors`,
-      this.session.access_token,
-    );
+      token,
+    ));
   }
 
-  async unenrollMfa(factorId: string): Promise<ApiResult<{ success: boolean }>> {
-    if (!this.session?.access_token) {
-      return { data: null, error: { message: 'No active session', code: 'NO_SESSION' } };
-    }
-    return this.client.requestWithToken<{ success: boolean }>(
+  /** Remove an MFA factor. `code` (TOTP or recovery code) is required while a verified factor exists. */
+  async unenrollMfa(factorId: string, code?: string): Promise<ApiResult<{ success: boolean }>> {
+    return this.withToken((token) => this.client.requestWithToken<{ success: boolean }>(
       `${this.basePath}/mfa/factors/${encodeURIComponent(factorId)}`,
-      this.session.access_token,
-      { method: 'DELETE' },
-    );
+      token,
+      { method: 'DELETE', body: { code } },
+    ));
   }
+}
+
+/** Stamp `expires_at` (unix seconds) from `expires_in` so expiry survives a reload. */
+function withExpiry(session: AuthSession | null): AuthSession | null {
+  if (!session || session.expires_at || !session.expires_in) return session;
+  return { ...session, expires_at: Math.floor(Date.now() / 1000) + session.expires_in };
 }

@@ -1,4 +1,4 @@
-import type { HttpClient } from './client';
+import { errorMessage, type HttpClient } from './client';
 import type { ApiResult } from '../types';
 import { validatePath } from './validation';
 
@@ -57,8 +57,35 @@ export interface StorageListItem {
 }
 
 export interface UploadOptions {
+  /** @deprecated Not supported by the API; ignored. */
   cacheControl?: string;
   upsert?: boolean;
+  /**
+   * MIME type stored with the file. Defaults to the Blob's own type, else a
+   * guess from the path's extension, else `application/octet-stream`.
+   */
+  contentType?: string;
+}
+
+/** Common extensions → MIME type, so Buffer/ArrayBuffer uploads aren't stored as octet-stream. */
+const MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  avif: 'image/avif', svg: 'image/svg+xml', ico: 'image/x-icon', pdf: 'application/pdf',
+  json: 'application/json', txt: 'text/plain', csv: 'text/csv', html: 'text/html', css: 'text/css',
+  js: 'text/javascript', mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', wav: 'audio/wav',
+  zip: 'application/zip',
+};
+
+function guessContentType(path: string): string | undefined {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return MIME_BY_EXT[ext];
+}
+
+/** The controller wraps results as `{ data, error: null }`; return the inner payload. */
+function unwrapEnvelope<T>(result: ApiResult<unknown>): ApiResult<T> {
+  if (result.error) return result;
+  const body = result.data as { data?: T } | null;
+  return { data: (body?.data ?? body) as T, error: null };
 }
 
 export class StorageClient {
@@ -95,7 +122,8 @@ export class StorageBucket {
    * Upload a file to the bucket.
    *
    * Posts multipart/form-data to `POST /api/project/{slug}/storage/{bucket}/upload`
-   * with the project apiKey in the Authorization header. Sends fields:
+   * as the signed-in user when there is a session (the project key otherwise).
+   * Sends fields:
    *   - `file`   binary
    *   - `path`   destination path inside the bucket
    *   - `upsert` "true" if overwriting (optional)
@@ -112,11 +140,12 @@ export class StorageBucket {
 
     const formData = new FormData();
 
-    // Normalize to a Blob. `File` already extends `Blob`; `ArrayBuffer`,
-    // typed arrays (`Uint8Array`), and Node `Buffer`s (which extend
-    // `Uint8Array`) are all valid `BlobPart`s — no Node-only `Buffer` global
-    // is referenced, so this is safe in the browser.
-    const blob: Blob = file instanceof Blob ? file : new Blob([file as BlobPart]);
+    // Normalize to a typed Blob. `File`/`Blob`, `ArrayBuffer`, typed arrays
+    // and Node `Buffer`s (a `Uint8Array`) are all valid `BlobPart`s — no
+    // Node-only global is referenced, so this is safe in the browser. The type
+    // becomes the part's Content-Type, which the API stores as the MIME type.
+    const type = options?.contentType || (file instanceof Blob && file.type) || guessContentType(path) || 'application/octet-stream';
+    const blob = new Blob([file as BlobPart], { type });
 
     formData.append('file', blob, path.split('/').pop() || 'file');
     formData.append('path', path);
@@ -133,11 +162,8 @@ export class StorageBucket {
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch(url, {
+      const response = await this.client.authFetch(url, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.client.getApiKey()}`,
-        },
         body: formData,
         // Fail loudly on unexpected redirects rather than silently forwarding
         // the Authorization header to the redirect target.
@@ -152,8 +178,10 @@ export class StorageBucket {
         return {
           data: null,
           error: {
-            message: data?.message || data?.error?.message || 'Upload failed',
+            message: errorMessage(data, response.status, 'Upload failed'),
+            code: data?.code,
             status: response.status,
+            details: data ?? undefined,
           },
         };
       }
@@ -194,10 +222,7 @@ export class StorageBucket {
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${this.client.getApiKey()}`,
-        },
+      const response = await this.client.authFetch(url, {
         // Fail loudly on unexpected redirects rather than silently forwarding
         // the Authorization header to the redirect target.
         redirect: 'error',
@@ -206,11 +231,14 @@ export class StorageBucket {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        const body = await response.json().catch(() => null);
         return {
           data: null,
           error: {
-            message: 'Download failed',
+            message: errorMessage(body, response.status, 'Download failed'),
+            code: body?.code,
             status: response.status,
+            details: body ?? undefined,
           },
         };
       }
@@ -242,10 +270,10 @@ export class StorageBucket {
       const invalid = validatePath(path);
       if (invalid) return invalid as ApiResult<{ deleted: string[]; errors: string[] }>;
     }
-    return this.client.request<{ deleted: string[]; errors: string[] }>(this.basePath, {
+    return unwrapEnvelope(await this.client.request(this.basePath, {
       method: 'DELETE',
       body: { paths },
-    });
+    }));
   }
 
   /**
@@ -260,7 +288,7 @@ export class StorageBucket {
     if (options?.limit) params.set('limit', options.limit.toString());
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<StorageListItem[]>(`${this.basePath}${query}`);
+    return unwrapEnvelope(await this.client.request(`${this.basePath}${query}`));
   }
 
   /**
@@ -300,12 +328,16 @@ export class StorageBucket {
   }
 
   /**
-   * Create the bucket (if it doesn't exist)
+   * Create the bucket if it doesn't exist (requires a service_role key).
+   * `public` is sent only when given, so an "ensure bucket" call leaves an
+   * existing bucket's visibility unchanged; new buckets default to private.
    */
-  async createBucket(): Promise<ApiResult<{ bucket: string; created: boolean }>> {
-    return this.client.request<{ bucket: string; created: boolean }>(
+  async createBucket(
+    options: { public?: boolean } = {},
+  ): Promise<ApiResult<{ bucket: string; created: boolean }>> {
+    return unwrapEnvelope(await this.client.request(
       `${this.basePath}/create`,
-      { method: 'POST' }
-    );
+      { method: 'POST', body: options.public === undefined ? undefined : { public: options.public } }
+    ));
   }
 }

@@ -67,11 +67,12 @@ export class DatabaseClient {
   }
 
   /**
-   * Get table metadata including columns
+   * Get table metadata including columns. The API returns one entry per
+   * matching table (an empty array when the table doesn't exist).
    */
-  async getTableMetadata(tableName: string): Promise<ApiResult<TableMetadata>> {
+  async getTableMetadata(tableName: string): Promise<ApiResult<TableMetadata[]>> {
     const query = new URLSearchParams({ table: tableName });
-    return this.client.request<TableMetadata>(`${this.basePath}/tables?${query.toString()}`);
+    return this.client.request<TableMetadata[]>(`${this.basePath}/tables?${query.toString()}`);
   }
 
   /**
@@ -88,9 +89,11 @@ export class DatabaseClient {
     if (options.sortOrder) params.set('sortOrder', options.sortOrder);
 
     const query = params.toString() ? `?${params.toString()}` : '';
-    return this.client.request<{ rows: T[]; total: number }>(
+    const result = await this.client.request<{ data: T[]; total_rows: number }>(
       `${this.basePath}/tables/${encodeURIComponent(tableName)}/data${query}`
     );
+    if (result.error) return result;
+    return { data: { rows: result.data.data ?? [], total: result.data.total_rows ?? 0 }, error: null };
   }
 
   /**
@@ -133,7 +136,7 @@ export class DatabaseClient {
   ): Promise<ApiResult<T>> {
     const result = await this.client.request<{
       success: boolean;
-      data: T;
+      data: T[];
       message: string;
     }>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/rows/${encodeURIComponent(String(rowId))}`, {
       method: 'PUT',
@@ -144,8 +147,9 @@ export class DatabaseClient {
       return result as ApiResult<T>;
     }
 
+    // The API returns the updated rows as an array; return the row.
     return {
-      data: result.data.data || (result.data as unknown as T),
+      data: result.data.data?.[0] ?? (result.data as unknown as T),
       error: null,
     };
   }
@@ -162,48 +166,54 @@ export class DatabaseClient {
   }
 
   /**
-   * Bulk insert rows
+   * Bulk insert rows. Returns the inserted rows.
    * Note: Requires service_role_key for authentication
    */
   async bulkInsert<T = Record<string, unknown>>(
     tableName: string,
     rows: Record<string, unknown>[]
   ): Promise<ApiResult<T[]>> {
-    return this.client.request<T[]>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/rows/bulk`, {
+    const result = await this.client.request<{ data?: T[] }>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/rows/bulk`, {
       method: 'POST',
       body: rows,
     });
+    if (result.error) return result;
+    return { data: result.data.data ?? [], error: null };
   }
 
   /**
-   * Bulk update rows
-   * Note: Requires service_role_key for authentication
+   * Bulk update rows. Returns the number of rows updated.
+   * Note: Requires a service_role key or a signed-in user (RLS applies)
    */
-  async bulkUpdate<T = Record<string, unknown>>(
+  async bulkUpdate(
     tableName: string,
     updates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }>
-  ): Promise<ApiResult<T[]>> {
-    return this.client.request<T[]>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/rows/bulk`, {
+  ): Promise<ApiResult<{ updated: number }>> {
+    const result = await this.client.request<{ rows_affected?: number }>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/rows/bulk`, {
       method: 'PUT',
       body: updates,
     });
+    if (result.error) return result;
+    return { data: { updated: result.data.rows_affected ?? 0 }, error: null };
   }
 
   /**
-   * Bulk delete rows
-   * Note: Requires service_role_key for authentication
+   * Bulk delete rows. Returns the number of rows deleted.
+   * Note: Requires a service_role key or a signed-in user (RLS applies)
    */
   async bulkDelete(
     tableName: string,
     conditions: Record<string, unknown>[]
   ): Promise<ApiResult<{ deleted: number }>> {
-    return this.client.request<{ deleted: number }>(
+    const result = await this.client.request<{ rows_affected?: number }>(
       `${this.basePath}/tables/${encodeURIComponent(tableName)}/rows/bulk`,
       {
         method: 'DELETE',
         body: conditions,
       }
     );
+    if (result.error) return result;
+    return { data: { deleted: result.data.rows_affected ?? 0 }, error: null };
   }
 
   /**
@@ -243,7 +253,19 @@ export class DatabaseClient {
    * List RLS policies for a table
    */
   async listPolicies(tableName: string): Promise<ApiResult<RlsPolicy[]>> {
-    return this.client.request<RlsPolicy[]>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/policies`);
+    const result = await this.client.request<{
+      policies?: Array<{ name: string; command: RlsPolicy['command']; role?: string; using?: string | null; with_check?: string | null }>;
+    }>(`${this.basePath}/tables/${encodeURIComponent(tableName)}/policies`);
+    if (result.error) return result;
+    // Map the API's pg_policies shape to the RlsPolicy fields createPolicy takes.
+    const policies = (result.data.policies ?? []).map((p) => ({
+      name: p.name,
+      command: p.command,
+      definition: p.using ?? '',
+      ...(p.with_check ? { check: p.with_check } : {}),
+      roles: String(p.role ?? '').replace(/[{}]/g, '').split(',').map((r) => r.trim()).filter(Boolean),
+    }));
+    return { data: policies, error: null };
   }
 
   /**

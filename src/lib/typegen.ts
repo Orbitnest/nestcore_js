@@ -13,6 +13,7 @@ const PG_TO_TS: Record<string, string> = {
   date: 'string', timestamp: 'string', timestamptz: 'string',
   'timestamp with time zone': 'string', 'timestamp without time zone': 'string',
   time: 'string', timetz: 'string', interval: 'string',
+  'time without time zone': 'string', 'time with time zone': 'string',
   json: 'Record<string, unknown>', jsonb: 'Record<string, unknown>',
   bytea: 'string',
 };
@@ -42,16 +43,6 @@ export interface GenerateTypesOptions {
   exclude?: RegExp;
 }
 
-/** Loosely-typed metadata shapes — tolerant of how the endpoint wraps results. */
-type Col = { name: string; type: string; nullable?: boolean };
-function columnsOf(meta: unknown): Col[] {
-  const m = meta as { columns?: Col[] } | Col[] | { data?: { columns?: Col[] } } | null;
-  if (!m) return [];
-  if (Array.isArray(m)) return (m[0] as { columns?: Col[] })?.columns ?? [];
-  if (Array.isArray((m as { columns?: Col[] }).columns)) return (m as { columns: Col[] }).columns;
-  if ((m as { data?: { columns?: Col[] } }).data?.columns) return (m as { data: { columns: Col[] } }).data.columns;
-  return [];
-}
 
 /**
  * Introspect the project schema and emit TypeScript row interfaces plus a
@@ -83,13 +74,13 @@ export async function generateTypes(db: DatabaseClient, opts: GenerateTypesOptio
   for (const table of tables) {
     const meta = await db.getTableMetadata(table);
     if (meta.error) continue;
-    const cols = columnsOf(meta.data);
+    const cols = meta.data.find((t) => t.table_name === table)?.columns ?? [];
     if (cols.length === 0) continue;
 
     const fields = cols.map((c) => {
-      const opt = c.nullable ? '?' : '';
-      const nullable = c.nullable ? ' | null' : '';
-      return `  ${fieldKey(c.name)}${opt}: ${tsType(c.type)}${nullable};`;
+      const opt = c.is_nullable ? '?' : '';
+      const nullable = c.is_nullable ? ' | null' : '';
+      return `  ${fieldKey(c.column_name)}${opt}: ${tsType(c.data_type)}${nullable};`;
     });
     const iface = pascalCase(table);
     blocks.push(`export interface ${iface} {\n${fields.join('\n')}\n}`);

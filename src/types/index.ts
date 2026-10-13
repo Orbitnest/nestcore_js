@@ -25,6 +25,8 @@ export interface RequestOptions {
   body?: unknown;
   headers?: Record<string, string>;
   timeout?: number;
+  /** Let the request outlive the page (used to flush analytics on unload). */
+  keepalive?: boolean;
 }
 
 export interface ApiResponse<T = unknown> {
@@ -38,6 +40,8 @@ export interface ApiError {
     message: string;
     code?: string;
     status?: number;
+    /** Parsed error body, when the SDK has one (e.g. a function's 4xx JSON). */
+    details?: unknown;
   };
 }
 
@@ -50,14 +54,18 @@ export interface QueryResult<T = Record<string, unknown>> {
   fields?: Array<{ name: string; dataType: string }>;
 }
 
+/** One table as returned by `GET /database/tables` (columns from information_schema). */
 export interface TableMetadata {
-  name: string;
-  schema: string;
+  table_name: string;
+  rls_enabled?: boolean;
   columns: Array<{
-    name: string;
-    type: string;
-    nullable: boolean;
-    defaultValue: string | null;
+    column_name: string;
+    /** information_schema `data_type`, e.g. `integer`, `character varying`, `ARRAY`. */
+    data_type: string;
+    is_nullable: boolean;
+    column_default: string | null;
+    ordinal_position?: number;
+    constraint_type?: string | null;
   }>;
 }
 
@@ -158,12 +166,16 @@ export interface AuthUser {
   created_at: string;
   updated_at: string;
   user_metadata?: Record<string, unknown>;
+  /** Set while an email change waits for `verifyEmailChange`. */
+  new_email?: string | null;
 }
 
 export interface AuthSession {
   access_token: string;
   refresh_token: string;
   expires_in: number;
+  /** Unix seconds when `access_token` expires. Set by the SDK from `expires_in`. */
+  expires_at?: number;
   token_type: string;
   user: AuthUser;
 }
@@ -259,5 +271,8 @@ export interface PasskeySignUpVerifyOptions {
 export interface UpdateUserOptions {
   email?: string;
   password?: string;
+  /** Required (for accounts with a password) when changing `email` or `password`. */
+  current_password?: string;
+  /** Merged into the user's `user_metadata`. */
   metadata?: Record<string, unknown>;
 }
