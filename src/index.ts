@@ -8,6 +8,7 @@ import { EnvironmentClient } from './lib/environment';
 import { StorageClient } from './lib/storage';
 import { RealtimeClient } from './lib/realtime';
 import { AnalyticsClient } from './lib/analytics';
+import { AiClient } from './lib/ai';
 import type { OrbitNestConfig } from './types';
 import type { RealtimeOptions } from './lib/realtime';
 import { type StorageAdapter, localStorageAdapter, memoryAdapter, createLocalStorageAdapter, createMemoryAdapter } from './lib/storage-adapters';
@@ -18,6 +19,7 @@ export * from './lib/environment';
 export * from './lib/storage';
 export * from './lib/realtime';
 export * from './lib/analytics';
+export * from './lib/ai';
 export { generateTypes, type GenerateTypesOptions } from './lib/typegen';
 export { validatePath, sanitizePath, validateRequired } from './lib/validation';
 export { OrbitNestError, unwrap } from './lib/errors';
@@ -80,6 +82,8 @@ export interface OrbitNestClient {
   env: EnvironmentClient;
   storage: StorageClient;
   analytics: AnalyticsClient;
+  /** AI Gateway: chat, streaming and embeddings with the project's own provider keys. */
+  ai: AiClient;
   /**
    * Create a realtime channel for live DB-change subscriptions and broadcasts.
    *
@@ -174,6 +178,7 @@ export function createClient(
     channel: (name: string) => realtimeClient.channel(name),
     realtime: realtimeClient,
     analytics: new AnalyticsClient(httpClient),
+    ai: new AiClient(httpClient),
   };
 }
 
