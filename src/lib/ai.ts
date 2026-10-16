@@ -3,9 +3,31 @@ import type { ApiResult } from '../types';
 
 export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'openai_compatible';
 
+/** `url`: a `data:image/png;base64,…` URL, or an https URL (OpenAI and Anthropic only). */
+export type AiContentPart = { type: 'text'; text: string } | { type: 'image'; url: string };
+
+export interface AiToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  /** Provider state; send the call back unchanged in the assistant message. */
+  signature?: string;
+}
+
+export interface AiTool {
+  name: string;
+  description?: string;
+  /** JSON Schema of the arguments object. */
+  parameters?: Record<string, unknown>;
+}
+
 export interface AiMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | AiContentPart[] | null;
+  /** assistant: the calls from a previous reply (`toolCalls`). */
+  toolCalls?: AiToolCall[];
+  /** tool: the id of the call this result answers. */
+  toolCallId?: string;
 }
 
 export interface AiChatOptions {
@@ -16,22 +38,27 @@ export interface AiChatOptions {
   messages: AiMessage[];
   temperature?: number;
   maxTokens?: number;
+  tools?: AiTool[];
+  toolChoice?: 'auto' | 'none' | 'required' | { name: string };
 }
 
 export interface AiChatResult {
   text: string;
+  /** Calls the model wants made; answer each with a `tool` message and chat again. */
+  toolCalls: AiToolCall[];
   model: string;
   provider: AiProviderId;
   tokensIn: number;
   tokensOut: number;
-  /** null for models without a known price. */
-  costUsd: number | null;
+  /** List price; models without a listed price are charged at their provider's top price. */
+  costUsd: number;
   finishReason: string | null;
 }
 
 export type AiStreamEvent =
   | { type: 'delta'; text: string }
-  | { type: 'done'; model: string; tokensIn: number; tokensOut: number; costUsd: number | null; finishReason: string | null }
+  | ({ type: 'tool_call' } & AiToolCall)
+  | { type: 'done'; model: string; tokensIn: number; tokensOut: number; costUsd: number; finishReason: string | null }
   | { type: 'error'; code?: string; message: string; status?: number };
 
 export interface AiEmbedResult {
@@ -68,7 +95,21 @@ export class AiClient {
   }
 
   private body(o: AiChatOptions, stream: boolean) {
-    return { model: o.model, provider: o.provider, messages: o.messages, temperature: o.temperature, max_tokens: o.maxTokens, stream };
+    return {
+      model: o.model,
+      provider: o.provider,
+      messages: o.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.toolCalls ? { tool_calls: m.toolCalls } : {}),
+        ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
+      })),
+      temperature: o.temperature,
+      max_tokens: o.maxTokens,
+      tools: o.tools,
+      tool_choice: o.toolChoice,
+      stream,
+    };
   }
 
   async chat(options: AiChatOptions): Promise<ApiResult<AiChatResult>> {
@@ -77,8 +118,9 @@ export class AiClient {
   }
 
   /**
-   * Stream a reply: `delta` events, then one `done` (or `error`). Errors arrive
-   * as an `error` event, never as a throw. `signal` cancels the stream.
+   * Stream a reply: `delta` and `tool_call` events, then one `done` (or `error`).
+   * Errors arrive as an `error` event, never as a throw. `signal`, or leaving
+   * the loop early, cancels the stream.
    */
   async *chatStream(options: AiChatOptions, { signal }: { signal?: AbortSignal } = {}): AsyncGenerator<AiStreamEvent> {
     let res: Response;
@@ -122,16 +164,21 @@ async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).replace(/\r$/, '');
-      buf = buf.slice(nl + 1);
-      if (line.startsWith('data:')) yield line.slice(5).trimStart();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).replace(/\r$/, '');
+        buf = buf.slice(nl + 1);
+        if (line.startsWith('data:')) yield line.slice(5).trimStart();
+      }
     }
+    if (buf.startsWith('data:')) yield buf.slice(5).trimStart();
+  } finally {
+    // A consumer that leaves the loop early must close the connection, or the server keeps generating (and billing).
+    await reader.cancel().catch(() => {});
   }
-  if (buf.startsWith('data:')) yield buf.slice(5).trimStart();
 }

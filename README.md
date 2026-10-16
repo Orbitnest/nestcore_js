@@ -133,6 +133,23 @@ origin don't collide.
 
 ---
 
+## AI
+
+Chat, streaming, tool calls and embeddings through the project's own provider keys (Studio → Project Settings → AI). Calls need a signed-in user or the service-role key.
+
+```ts
+const { data } = await client.ai.chat({ messages: [{ role: 'user', content: 'Summarise my last order' }] });
+
+for await (const ev of client.ai.chatStream({ messages })) {
+  if (ev.type === 'delta') process.stdout.write(ev.text);
+  if (ev.type === 'error') console.error(ev.code, ev.message);
+}
+
+const { data: vectors } = await client.ai.embed(['first', 'second']); // 768 dimensions
+```
+
+Tools: pass `tools: [{ name, description, parameters }]`; run each of `data.toolCalls`, then send the reply back as `{ role: 'assistant', content: null, toolCalls }` plus one `{ role: 'tool', toolCallId, content }` per call. See https://orbitnest.io/docs/ai-gateway.
+
 ## Realtime
 
 Browsers can't set WebSocket request headers, so the API key is sent via the
