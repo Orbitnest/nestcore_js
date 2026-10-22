@@ -42,3 +42,16 @@ export function unwrap<T>(result: ApiResult<T>): T {
   }
   return result.data as T;
 }
+
+/**
+ * `error.code` values for the project auth limits (all HTTP 429). The limits
+ * are set per project in Studio → Settings → Auth Security.
+ */
+export const AuthLimitCodes = {
+  /** Too many wrong codes: codes are invalidated for a while. */
+  OTP_RATE_LIMITED: 'OTP_RATE_LIMITED',
+  /** Too many codes requested for one email in the last hour. */
+  OTP_REQUEST_LIMIT: 'OTP_REQUEST_LIMIT',
+  /** Too many wrong passwords: the email is locked for the lockout duration. */
+  ACCOUNT_LOCKED: 'ACCOUNT_LOCKED',
+} as const;

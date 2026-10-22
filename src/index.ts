@@ -22,7 +22,7 @@ export * from './lib/analytics';
 export * from './lib/ai';
 export { generateTypes, type GenerateTypesOptions } from './lib/typegen';
 export { validatePath, sanitizePath, validateRequired } from './lib/validation';
-export { OrbitNestError, unwrap } from './lib/errors';
+export { OrbitNestError, unwrap, AuthLimitCodes } from './lib/errors';
 export { isMfaChallenge, type MfaChallenge, type MfaFactor } from './lib/auth';
 export {
   type StorageAdapter,

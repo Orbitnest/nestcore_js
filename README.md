@@ -133,6 +133,22 @@ origin don't collide.
 
 ---
 
+### Calling auth from your server
+
+Auth endpoints are throttled per client IP. When your server calls them for its users (a Next.js server action, an API route), every user would share your server's IP and its limit. Pass the user's IP with the **service-role key** and each user gets their own bucket; the same IP goes into the auth audit log:
+
+```ts
+const client = createClient({
+  apiKey: process.env.ORBITNEST_SERVICE_ROLE_KEY!, // never ship this key to a browser
+  clientIp: userIp, // e.g. the first address of x-forwarded-for set by YOUR proxy
+});
+await client.auth.signIn({ email, password });
+```
+
+`clientIp` is sent as `X-OrbitNest-Client-IP` and must be a single IPv4 or IPv6 address. The API ignores it on requests made with the anon key or a user token, so a browser can't choose its own bucket. Create one client per request.
+
+Project auth answers `429` with a `code` when a limit from the project's auth settings is reached: `OTP_RATE_LIMITED` (too many wrong codes), `OTP_REQUEST_LIMIT` (too many codes requested for one email in an hour), `ACCOUNT_LOCKED` (too many wrong passwords).
+
 ## AI
 
 Chat, streaming, tool calls and embeddings through the project's own provider keys (Studio → Project Settings → AI). Calls need a signed-in user or the service-role key.

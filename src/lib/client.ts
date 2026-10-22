@@ -10,6 +10,7 @@ export class HttpClient {
   private projectSlug: string;
   private timeout: number;
   private analyticsToken: string | undefined;
+  private clientIp: string | undefined;
   private accessTokenProvider?: () => Promise<string | null>;
   private tokenRefresher?: (staleToken: string) => Promise<string | null>;
 
@@ -19,6 +20,7 @@ export class HttpClient {
     this.projectSlug = config.projectSlug;
     this.timeout = config.timeout || 30000;
     this.analyticsToken = config.analyticsToken;
+    this.clientIp = config.clientIp;
   }
 
   getProjectSlug(): string {
@@ -119,7 +121,11 @@ export class HttpClient {
   }
 
   private headersFor(token: string | null): Record<string, string> {
-    return { apikey: this.apiKey, Authorization: `Bearer ${token || this.apiKey}` };
+    return {
+      apikey: this.apiKey,
+      Authorization: `Bearer ${token || this.apiKey}`,
+      ...(this.clientIp ? { 'X-OrbitNest-Client-IP': this.clientIp } : {}),
+    };
   }
 
   private async _fetch<T>(

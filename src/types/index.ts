@@ -17,6 +17,13 @@ export interface OrbitNestConfig {
   /** Directory containing ordered `*.sql` migration files. Default `migrations`
    *  (resolved from the process working directory). Used by `client.migrations`. */
   migrationsDir?: string;
+  /**
+   * Server-side only: the end user's IP when your server calls auth for them
+   * (e.g. a Next.js server action). Sent as `X-OrbitNest-Client-IP` and honoured
+   * only with the service_role key, so each user gets their own throttle
+   * bucket instead of sharing your server's. Create one client per request.
+   */
+  clientIp?: string;
 }
 
 // HTTP
@@ -199,7 +206,7 @@ export interface PasswordResetOptions {
   /** Email the recovery OTP was sent to. Required — the API needs it to
    *  locate the account since the OTP itself is not a JWT. */
   email: string;
-  /** 4-digit OTP from the recovery email. Named `token` for API symmetry
+  /** Code from the recovery email (otp_config.code_length digits, 6 by default). Named `token` for API symmetry
    *  with other auth providers; the wire value is the OTP code. */
   token: string;
   /** New password to set on the account. */
