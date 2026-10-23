@@ -97,6 +97,11 @@ export class PresenceManager {
   /** Returns a shallow copy of the last-known presence roster. */
   getState(): PresenceState { return { ...this.state }; }
 
+  /** True once any presence callback is registered. */
+  _hasListeners(): boolean {
+    return this.syncCbs.length + this.joinCbs.length + this.leaveCbs.length > 0;
+  }
+
   /** Register a callback fired on every full roster sync. */
   onSync(cb: PresenceSyncCallback): this { this.syncCbs.push(cb); return this; }
 
@@ -198,7 +203,7 @@ export class RealtimeChannel {
       const [schema, table] = splitTableKey(key);
       this.client['syncTable'](ws, schema, table);
     }
-    if (this.handlers.some((h) => h.type === 'broadcast')) {
+    if (this._hasBroadcast()) {
       // Subscribe to the broadcast channel (no DB trigger needed)
       ws.send(JSON.stringify({
         id: `${this.name}-bc-${Math.random().toString(36).slice(2)}`,
@@ -227,8 +232,15 @@ export class RealtimeChannel {
       .filter((o) => (o.schema ?? 'public') === schema && o.table === table);
   }
 
+  /**
+   * Whether the server must hold `broadcast:<name>` for this channel: broadcast
+   * handlers, presence listeners, or no table handlers at all (a room used for
+   * presence only still needs the roster fan-out, including leaves).
+   */
   _hasBroadcast(): boolean {
-    return this.handlers.some((h) => h.type === 'broadcast');
+    return this.handlers.some((h) => h.type === 'broadcast')
+      || this.presence._hasListeners()
+      || !this.handlers.some((h) => h.type === 'postgres_changes');
   }
 
   _setStatus(status: RealtimeStatus, err?: Error): void {
