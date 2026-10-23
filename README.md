@@ -166,6 +166,31 @@ const { data: vectors } = await client.ai.embed(['first', 'second']); // 768 dim
 
 Tools: pass `tools: [{ name, description, parameters }]`; run each of `data.toolCalls`, then send the reply back as `{ role: 'assistant', content: null, toolCalls }` plus one `{ role: 'tool', toolCallId, content }` per call. See https://orbitnest.io/docs/ai-gateway.
 
+### Memory, collections, threads, semantic search
+
+```ts
+// Memory: facts about the signed-in user (near-duplicates update the same memory)
+await client.memory.add('Prefers vegetarian recipes', { kind: 'preference' });
+const { data: mem } = await client.memory.search('what should I cook?'); // mem.degraded = keyword fallback
+
+// Collections: documents chunked, embedded and searched (hybrid vector + keyword)
+await admin.collections.create({ name: 'handbook' });                       // service-role key
+await admin.collections.from('handbook').ingest({ url: 'https://example.com/guide.pdf' }, { wait: true });
+const { data: hits } = await client.collections.from('handbook').search('How do refunds work?');
+
+// Threads: saved conversations; replies stream and are stored as they arrive
+const { data: thread } = await client.ai.threads.create({ title: 'Trip' });
+for await (const ev of client.ai.threads.from(thread.id).run({ input: 'Plan a weekend', memory: true, collections: ['handbook'] })) {
+  if (ev.type === 'delta') process.stdout.write(ev.text);
+  if (ev.type === 'citation') console.log(`[${ev.index}]`, ev.title);
+}
+
+// Automatic embeddings (Studio → AI → Embeddings), then search a table by meaning under RLS
+const { data } = await client.db.from('articles').eq('published', true).semantic('body_embedding', 'reset my password', { k: 5 });
+```
+
+See https://orbitnest.io/docs/memory-api, /docs/collections, /docs/threads and /docs/embeddings.
+
 ## Realtime
 
 Browsers can't set WebSocket request headers, so the API key is sent via the

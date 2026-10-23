@@ -16,6 +16,8 @@ const PG_TO_TS: Record<string, string> = {
   'time without time zone': 'string', 'time with time zone': 'string',
   json: 'Record<string, unknown>', jsonb: 'Record<string, unknown>',
   bytea: 'string',
+  // pgvector columns arrive in their text form, '[0.1,0.2,…]' (node-postgres has no vector parser).
+  vector: 'string',
 };
 
 function tsType(pgType: string): string {

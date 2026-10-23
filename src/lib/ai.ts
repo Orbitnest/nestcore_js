@@ -1,4 +1,6 @@
 import { errorMessage, type HttpClient } from './client';
+import { sseData } from './sse';
+import { ThreadsClient, type AiTrace } from './ai-data';
 import type { ApiResult } from '../types';
 
 export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'openai_compatible';
@@ -88,7 +90,12 @@ export interface AiModel {
  * ```
  */
 export class AiClient {
-  constructor(private client: HttpClient) {}
+  /** Persistent conversations with streamed, saved replies (`threads.from(id).run()`). */
+  readonly threads: ThreadsClient;
+
+  constructor(private client: HttpClient) {
+    this.threads = new ThreadsClient(client);
+  }
 
   private path(p: string): string {
     return `/api/project/${this.client.getProjectSlug()}/ai/v1/${p}`;
@@ -157,28 +164,10 @@ export class AiClient {
   async models(): Promise<ApiResult<AiModel[]>> {
     return this.client.request<AiModel[]>(this.path('models'));
   }
-}
 
-/** `data:` payloads of a server-sent-events body. */
-async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl: number;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, nl).replace(/\r$/, '');
-        buf = buf.slice(nl + 1);
-        if (line.startsWith('data:')) yield line.slice(5).trimStart();
-      }
-    }
-    if (buf.startsWith('data:')) yield buf.slice(5).trimStart();
-  } finally {
-    // A consumer that leaves the loop early must close the connection, or the server keeps generating (and billing).
-    await reader.cancel().catch(() => {});
+  /** Service key: per-call traces (model, tokens, latency, cost, status), newest first. */
+  async traces(options: { limit?: number; offset?: number; threadId?: string; status?: 'ok' | 'error' } = {}): Promise<ApiResult<{ traces: AiTrace[]; total: number; retentionDays: number }>> {
+    const q = Object.entries(options).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
+    return this.client.request(this.path(`traces${q ? `?${q}` : ''}`));
   }
 }

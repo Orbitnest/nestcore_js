@@ -9,6 +9,7 @@ import { StorageClient } from './lib/storage';
 import { RealtimeClient } from './lib/realtime';
 import { AnalyticsClient } from './lib/analytics';
 import { AiClient } from './lib/ai';
+import { MemoryClient, CollectionsClient } from './lib/ai-data';
 import type { OrbitNestConfig } from './types';
 import type { RealtimeOptions } from './lib/realtime';
 import { type StorageAdapter, localStorageAdapter, memoryAdapter, createLocalStorageAdapter, createMemoryAdapter } from './lib/storage-adapters';
@@ -20,6 +21,7 @@ export * from './lib/storage';
 export * from './lib/realtime';
 export * from './lib/analytics';
 export * from './lib/ai';
+export * from './lib/ai-data';
 export { generateTypes, type GenerateTypesOptions } from './lib/typegen';
 export { validatePath, sanitizePath, validateRequired } from './lib/validation';
 export { OrbitNestError, unwrap, AuthLimitCodes } from './lib/errors';
@@ -82,8 +84,12 @@ export interface OrbitNestClient {
   env: EnvironmentClient;
   storage: StorageClient;
   analytics: AnalyticsClient;
-  /** AI Gateway: chat, streaming and embeddings with the project's own provider keys. */
+  /** AI Gateway: chat, streaming and embeddings with the project's own provider keys; `ai.threads` for conversations. */
   ai: AiClient;
+  /** Memory API: facts about a user or agent, with semantic search. */
+  memory: MemoryClient;
+  /** Vector collections: ingest documents, hybrid search. */
+  collections: CollectionsClient;
   /**
    * Create a realtime channel for live DB-change subscriptions and broadcasts.
    *
@@ -179,6 +185,8 @@ export function createClient(
     realtime: realtimeClient,
     analytics: new AnalyticsClient(httpClient),
     ai: new AiClient(httpClient),
+    memory: new MemoryClient(httpClient),
+    collections: new CollectionsClient(httpClient),
   };
 }
 

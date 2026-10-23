@@ -33,6 +33,22 @@ export class DatabaseClient {
    *
    *   db.query('SELECT * FROM users WHERE email = $1', [email])
    */
+  /**
+   * Rows nearest to `query` by meaning, from a column embedded with automatic
+   * embeddings (Studio → AI → Embeddings). Runs under RLS as the signed-in user.
+   * Each row carries `_similarity` (cosine) and `_score`. With `hybridColumn`,
+   * keyword matches on that text column are blended in (reciprocal rank fusion).
+   * Usually reached through `db.from(table).eq(...).semantic(column, query)`.
+   */
+  async semantic<T = Record<string, unknown>>(
+    table: string,
+    column: string,
+    query: string,
+    opts: SemanticOptions & { filters?: SemanticFilter[] } = {},
+  ): Promise<ApiResult<{ rows: Array<T & { _similarity: number | null; _score: number }>; model: string | null }>> {
+    return this.client.request(`${this.basePath}/semantic`, { method: 'POST', body: { table, column, query, ...opts } });
+  }
+
   async query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<ApiResult<QueryResult<T>>> {
     const result = await this.client.request<{
       success: boolean;
@@ -290,6 +306,17 @@ const SAFE_IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 type QueryFilter = { col: string; op: string; value: unknown; ftsType?: string; config?: string };
 
+export interface SemanticOptions {
+  /** Rows to return (default 10, max 100; a builder `.limit()` sets it too). */
+  k?: number;
+  /** A text column to also rank by keyword match. */
+  hybridColumn?: string;
+  /** Drop rows below this cosine similarity (0–1). */
+  minSimilarity?: number;
+}
+
+export type SemanticFilter = { column: string; op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'ilike' | 'in' | 'is'; value?: unknown };
+
 /**
  * Fluent, Supabase-style query builder. Filters/ordering/pagination compose into
  * a single parameterized SELECT executed via the SQL endpoint — so values are
@@ -495,6 +522,24 @@ class TableQueryBuilder {
     const res = await this.select<T>(columns);
     if (res.error) return res as ApiResult<T | null>;
     return { data: res.data.rows[0] ?? null, error: null };
+  }
+
+  /**
+   * Semantic search over an embedded column, keeping this builder's filters
+   * (`eq`, `gt`, `in`, …; not `textSearch` or `nearest`).
+   *
+   * ```ts
+   * const { data } = await client.db.from('articles').eq('published', true)
+   *   .semantic('body_embedding', 'how do I reset my password?', { k: 5 });
+   * ```
+   */
+  async semantic<T = Record<string, unknown>>(column: string, query: string, opts: SemanticOptions = {}): Promise<ApiResult<{ rows: Array<T & { _similarity: number | null; _score: number }>; model: string | null }>> {
+    this.ident(column);
+    if (this._vectorOrder || this._filters.some((f) => f.op === 'fts')) {
+      return { data: null, error: { message: 'semantic() cannot be combined with textSearch() or nearest(); use hybridColumn for keyword ranking', code: 'INVALID_QUERY' } };
+    }
+    const filters = this._filters.map((f) => ({ column: f.col, op: f.op as SemanticFilter['op'], value: f.value }));
+    return this.db.semantic<T>(this.tableName, column, query, { k: this._limit, ...opts, ...(filters.length ? { filters } : {}) });
   }
 
   // ── Writes (delegate to the row endpoints) ────────────────────────────────
