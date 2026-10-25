@@ -1,22 +1,22 @@
-# @nestcore/js
+# @nestcorehq/js
 
 The official **browser/JavaScript SDK** for the [NestCore](https://nestcore.io)
 platform — auth, database, a Supabase-style query builder, storage, realtime,
 and edge functions, for web apps (React, Vue, Svelte, vanilla, …).
 
-This is the client-side counterpart to [`@nestcore/node`](https://github.com/Orbitnest/nestcore_node):
+This is the client-side counterpart to [`@nestcorehq/node`](https://github.com/Orbitnest/nestcore_node):
 the same API surface, packaged for the browser (ESM, CJS, and a CDN/IIFE bundle),
 with session persistence and no Node-only dependencies.
 
 ```bash
-npm install @nestcore/js
+npm install @nestcorehq/js
 ```
 
 Or drop it in over a CDN — the global is `NestCore` (the old `OrbitNest` global
 still works as a deprecated alias):
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@nestcore/js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@nestcorehq/js"></script>
 <script>
   const nestcore = NestCore.createClient({ apiKey: 'YOUR_ANON_KEY' });
 </script>
@@ -30,7 +30,7 @@ still works as a deprecated alias):
 ## Quick start
 
 ```ts
-import { createClient, localStorageAdapter } from '@nestcore/js';
+import { createClient, localStorageAdapter } from '@nestcorehq/js';
 
 const nestcore = createClient({
   apiKey: import.meta.env.VITE_NESTCORE_ANON_KEY,
@@ -78,7 +78,7 @@ for local dev.
 ### The query builder
 
 `db.from(table)` returns a chainable, **parameterized** builder (every value is
-bound, never interpolated) that mirrors `@nestcore/node` and Supabase:
+bound, never interpolated) that mirrors `@nestcorehq/node` and Supabase:
 
 ```ts
 nestcore.db.from('users')
@@ -107,7 +107,7 @@ client per request never sees another request's user). Pass a storage adapter
 to persist it:
 
 ```ts
-import { createClient, localStorageAdapter, createMemoryAdapter } from '@nestcore/js';
+import { createClient, localStorageAdapter, createMemoryAdapter } from '@nestcorehq/js';
 
 createClient({ apiKey, storage: localStorageAdapter }); // survives refresh
 createClient({ apiKey, storage: createMemoryAdapter() }); // in-memory store you can share deliberately
@@ -120,7 +120,7 @@ You can also supply your own adapter — any object with
 `getItem` / `setItem` / `removeItem`:
 
 ```ts
-import type { StorageAdapter } from '@nestcore/js';
+import type { StorageAdapter } from '@nestcorehq/js';
 
 const sessionStorageAdapter: StorageAdapter = {
   getItem: (k) => sessionStorage.getItem(k),
@@ -222,7 +222,7 @@ Generate row types from the live schema for end-to-end safety (typically run
 server-side / in a build step, since it needs a service-role key):
 
 ```ts
-import { generateTypes } from '@nestcore/js';
+import { generateTypes } from '@nestcorehq/js';
 const ts = await generateTypes(serverClient.db); // → string of TS interfaces + a `Database` map
 ```
 
@@ -236,7 +236,7 @@ const ts = await generateTypes(serverClient.db); // → string of TS interfaces 
 Targets ES2020 and any environment with `fetch`, `WebSocket`, `FormData`, and
 `Blob` (all modern browsers; Node 22+ for isomorphic use). No polyfills needed.
 
-`@nestcore/node` vs `@nestcore/js`: the Node SDK additionally ships a
+`@nestcorehq/node` vs `@nestcorehq/js`: the Node SDK additionally ships a
 filesystem-backed **migration runner**; the web SDK omits it (no filesystem in
 the browser) and adds **session persistence adapters**. Everything else is the
 same API.
@@ -256,7 +256,7 @@ npm run typecheck
 ## Migrating from `@orbitneststudio/js`
 
 The SDK was renamed from OrbitNest to NestCore. Switch the dependency to
-`@nestcore/js` and update your imports; nothing else has to change at once:
+`@nestcorehq/js` and update your imports; nothing else has to change at once:
 
 - The old export names still work as deprecated aliases: `OrbitNestError`
   (same class as `NestCoreError`, so `instanceof` checks keep working),

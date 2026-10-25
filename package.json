@@ -1,5 +1,5 @@
 {
-  "name": "@nestcore/js",
+  "name": "@nestcorehq/js",
   "version": "0.9.0",
   "description": "NestCore JavaScript/TypeScript SDK for the browser — auth, database, query builder, storage, realtime, edge functions.",
   "main": "dist/index.js",

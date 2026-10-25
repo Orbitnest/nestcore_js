@@ -125,7 +125,7 @@ export interface NestCoreClient {
  * service-role key.
  *
  * ```ts
- * import { createClient, localStorageAdapter } from '@nestcore/js';
+ * import { createClient, localStorageAdapter } from '@nestcorehq/js';
  *
  * const nestcore = createClient({
  *   apiKey: import.meta.env.VITE_NESTCORE_ANON_KEY,

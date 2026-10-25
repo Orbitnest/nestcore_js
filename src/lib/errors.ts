@@ -29,7 +29,7 @@ export type OrbitNestError = NestCoreError;
  * non-throwing behavior of the SDK.
  *
  * ```ts
- * import { unwrap } from '@nestcore/js';
+ * import { unwrap } from '@nestcorehq/js';
  *
  * try {
  *   const { rows } = unwrap(await nestcore.db.from('posts').select());
