@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// OrbitNest Realtime — Node SDK
+// NestCore Realtime — Node SDK
 // Provides a Supabase-compatible channel API over a native WebSocket.
 // ─────────────────────────────────────────────────────────────────────────────
 

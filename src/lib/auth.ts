@@ -41,7 +41,9 @@ export function isMfaChallenge(value: unknown): value is MfaChallenge {
   return !!value && typeof value === 'object' && (value as MfaChallenge).mfa_required === true;
 }
 
-const SESSION_KEY = 'orbitnest.session';
+const SESSION_KEY = 'nestcore.session';
+/** Pre-rename key prefix; a session stored under it is migrated on first read. */
+const LEGACY_SESSION_KEY = 'orbitnest.session';
 /** Refresh the access token this many seconds before it expires. */
 const REFRESH_MARGIN_S = 30;
 const NO_SESSION = { data: null, error: { message: 'No active session', code: 'NO_SESSION' } } as const;
@@ -61,7 +63,20 @@ export class AuthClient {
     // same origin don't clobber each other.
     this.storageKey = `${SESSION_KEY}.${this.client.getProjectSlug()}`;
     // Rehydrate a previously persisted session (browser refresh).
-    const raw = this.storage.getItem(this.storageKey);
+    let raw = this.storage.getItem(this.storageKey);
+    if (raw === null) {
+      // Keep users signed in across the OrbitNest → NestCore rename.
+      const legacyKey = `${LEGACY_SESSION_KEY}.${this.client.getProjectSlug()}`;
+      try {
+        raw = this.storage.getItem(legacyKey);
+        if (raw !== null) {
+          this.storage.setItem(this.storageKey, raw);
+          this.storage.removeItem(legacyKey);
+        }
+      } catch {
+        /* storage is best-effort */
+      }
+    }
     if (raw) {
       try {
         this._session = JSON.parse(raw) as AuthSession;

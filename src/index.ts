@@ -10,7 +10,7 @@ import { RealtimeClient } from './lib/realtime';
 import { AnalyticsClient } from './lib/analytics';
 import { AiClient } from './lib/ai';
 import { MemoryClient, CollectionsClient } from './lib/ai-data';
-import type { OrbitNestConfig } from './types';
+import type { NestCoreConfig } from './types';
 import type { RealtimeOptions } from './lib/realtime';
 import { type StorageAdapter, localStorageAdapter, memoryAdapter, createLocalStorageAdapter, createMemoryAdapter } from './lib/storage-adapters';
 
@@ -24,7 +24,7 @@ export * from './lib/ai';
 export * from './lib/ai-data';
 export { generateTypes, type GenerateTypesOptions } from './lib/typegen';
 export { validatePath, sanitizePath, validateRequired } from './lib/validation';
-export { OrbitNestError, unwrap, AuthLimitCodes } from './lib/errors';
+export { NestCoreError, OrbitNestError, unwrap, AuthLimitCodes } from './lib/errors';
 export { isMfaChallenge, type MfaChallenge, type MfaFactor } from './lib/auth';
 export {
   type StorageAdapter,
@@ -34,10 +34,10 @@ export {
   createMemoryAdapter,
 };
 
-const DEFAULT_BASE_URL = 'https://api.orbitnest.io';
+const DEFAULT_BASE_URL = 'https://api.nestcore.io';
 
 /**
- * Decode the `project_slug` claim from an OrbitNest API key (JWT).
+ * Decode the `project_slug` claim from an NestCore API key (JWT).
  *
  * The signing key isn't needed — we only read the payload to look up which
  * project the key belongs to. Throws when the token isn't a JWT or doesn't
@@ -46,7 +46,7 @@ const DEFAULT_BASE_URL = 'https://api.orbitnest.io';
 function decodeProjectSlugFromJwt(token: string): string {
   const parts = token.split('.');
   if (parts.length !== 3) {
-    throw new Error('OrbitNest: apiKey is not a valid JWT (expected 3 segments)');
+    throw new Error('NestCore: apiKey is not a valid JWT (expected 3 segments)');
   }
   let payload = parts[1];
   // base64url → base64 padding
@@ -63,24 +63,27 @@ function decodeProjectSlugFromJwt(token: string): string {
       : Buffer.from(payload, 'base64').toString('utf8');
     json = JSON.parse(decoded) as Record<string, unknown>;
   } catch {
-    throw new Error('OrbitNest: could not decode apiKey JWT payload');
+    throw new Error('NestCore: could not decode apiKey JWT payload');
   }
   const slug = json['project_slug'];
   if (typeof slug !== 'string' || slug.length === 0) {
-    throw new Error('OrbitNest: apiKey JWT does not contain a project_slug claim');
+    throw new Error('NestCore: apiKey JWT does not contain a project_slug claim');
   }
   return slug;
 }
 
-export interface OrbitNestClient {
+/** @deprecated Renamed to {@link NestCoreClient}. */
+export type OrbitNestClient = NestCoreClient;
+
+export interface NestCoreClient {
   db: DatabaseClient;
   functions: FunctionsClient;
-  /** @deprecated Needs a Studio admin token; every call returns an `ADMIN_ONLY` error. */
+  /** @deprecated Needs a console admin token; every call returns an `ADMIN_ONLY` error. */
   jobs: JobsClient;
   auth: AuthClient;
-  /** @deprecated Needs a Studio admin token; every call returns an `ADMIN_ONLY` error. */
+  /** @deprecated Needs a console admin token; every call returns an `ADMIN_ONLY` error. */
   logs: LoggingClient;
-  /** @deprecated Needs a Studio admin token; every call returns an `ADMIN_ONLY` error. */
+  /** @deprecated Needs a console admin token; every call returns an `ADMIN_ONLY` error. */
   env: EnvironmentClient;
   storage: StorageClient;
   analytics: AnalyticsClient;
@@ -110,11 +113,11 @@ export interface OrbitNestClient {
 }
 
 /**
- * Create an OrbitNest client for the **browser** (and other DOM/fetch
+ * Create an NestCore client for the **browser** (and other DOM/fetch
  * environments).
  *
  * Only `apiKey` is required — the project slug is decoded from the API key's
- * JWT payload and `baseUrl` defaults to `https://api.orbitnest.io`.
+ * JWT payload and `baseUrl` defaults to `https://api.nestcore.io`.
  *
  * Pass a `storage` adapter to persist the auth session across page loads
  * (`localStorageAdapter` keeps users signed in after a refresh; the default is
@@ -122,21 +125,21 @@ export interface OrbitNestClient {
  * service-role key.
  *
  * ```ts
- * import { createClient, localStorageAdapter } from '@orbitneststudio/js';
+ * import { createClient, localStorageAdapter } from '@nestcore/js';
  *
- * const orbit = createClient({
- *   apiKey: import.meta.env.VITE_ORBITNEST_ANON_KEY,
+ * const nestcore = createClient({
+ *   apiKey: import.meta.env.VITE_NESTCORE_ANON_KEY,
  *   storage: localStorageAdapter, // keep the session after refresh
  * });
  *
- * const { data, error } = await orbit.db.from('posts').eq('published', true).select();
+ * const { data, error } = await nestcore.db.from('posts').eq('published', true).select();
  * ```
  */
 export function createClient(
-  config: OrbitNestConfig & { realtimeOptions?: RealtimeOptions; storage?: StorageAdapter },
-): OrbitNestClient {
+  config: NestCoreConfig & { realtimeOptions?: RealtimeOptions; storage?: StorageAdapter },
+): NestCoreClient {
   if (!config.apiKey) {
-    throw new Error('OrbitNest: apiKey is required');
+    throw new Error('NestCore: apiKey is required');
   }
 
   // Resolve projectSlug: caller override → JWT payload claim

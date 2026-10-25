@@ -50,9 +50,15 @@ const MAX_QUEUE = 1000;
 // Persisted identity keys. In a browser the SDK is re-instantiated on every full
 // page load, so generating a fresh anonymous_id per instance would count the same
 // visitor as a brand-new user on every visit. Persist it in localStorage instead.
-const ANON_STORAGE_KEY = 'orbitnest_anonymous_id';
-const SESSION_ID_KEY = 'orbitnest_session_id';
-const SESSION_TS_KEY = 'orbitnest_session_last_activity';
+const ANON_STORAGE_KEY = 'nestcore_anonymous_id';
+const SESSION_ID_KEY = 'nestcore_session_id';
+const SESSION_TS_KEY = 'nestcore_session_last_activity';
+/** Keys written before the OrbitNest → NestCore rename, migrated on first read. */
+const LEGACY_KEYS: Record<string, string> = {
+  [ANON_STORAGE_KEY]: 'orbitnest_anonymous_id',
+  [SESSION_ID_KEY]: 'orbitnest_session_id',
+  [SESSION_TS_KEY]: 'orbitnest_session_last_activity',
+};
 // 30 min of inactivity ends a session — matches analytics_projects.session_timeout_mins.
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -93,6 +99,19 @@ function getLocalStorage(): Storage | null {
   }
 }
 
+/** Read a key, moving a value stored under its pre-rename name to the new key
+ *  so returning visitors keep their anonymous id and session. */
+function readKey(store: Storage, key: string): string | null {
+  const value = store.getItem(key);
+  if (value !== null) return value;
+  const legacy = LEGACY_KEYS[key];
+  const old = legacy ? store.getItem(legacy) : null;
+  if (old === null || !legacy) return null;
+  store.setItem(key, old);
+  store.removeItem(legacy);
+  return old;
+}
+
 /** Browser vs server — used to default the event platform when not specified. */
 function detectPlatform(): Platform {
   return typeof window !== 'undefined' && typeof document !== 'undefined' ? 'web' : 'node';
@@ -102,7 +121,7 @@ function detectPlatform(): Platform {
 function loadOrCreateAnonymousId(store: Storage | null): string {
   if (!store) return generateUuid();
   try {
-    let id = store.getItem(ANON_STORAGE_KEY);
+    let id = readKey(store, ANON_STORAGE_KEY);
     if (!id) {
       id = generateUuid();
       store.setItem(ANON_STORAGE_KEY, id);
@@ -119,8 +138,8 @@ function resolveSessionId(store: Storage | null, fallback: string): string {
   if (!store) return fallback;
   try {
     const now = Date.now();
-    const last = parseInt(store.getItem(SESSION_TS_KEY) ?? '0', 10) || 0;
-    let sid = store.getItem(SESSION_ID_KEY);
+    const last = parseInt(readKey(store, SESSION_TS_KEY) ?? '0', 10) || 0;
+    let sid = readKey(store, SESSION_ID_KEY);
     if (!sid || now - last > SESSION_TIMEOUT_MS) {
       sid = generateUuid();
       store.setItem(SESSION_ID_KEY, sid);
@@ -222,7 +241,7 @@ export class AnalyticsClient {
     void this.flush(keepalive).then((r) => {
       const status = r.error?.status;
       if (r.error && status !== undefined && status !== 429 && status < 500) {
-        console.warn(`[orbitnest] analytics events rejected (${status}): ${r.error.message}`);
+        console.warn(`[nestcore] analytics events rejected (${status}): ${r.error.message}`);
       }
     });
   }

@@ -1,8 +1,8 @@
-import type { OrbitNestConfig, RequestOptions, ApiResult, ApiError } from '../types';
+import type { NestCoreConfig, RequestOptions, ApiResult, ApiError } from '../types';
 
 // Internal config — by the time it reaches the HttpClient the slug has been
 // resolved (decoded from JWT or supplied by the caller), so it's required.
-type ResolvedConfig = Omit<OrbitNestConfig, 'projectSlug'> & { projectSlug: string };
+type ResolvedConfig = Omit<NestCoreConfig, 'projectSlug'> & { projectSlug: string };
 
 export class HttpClient {
   private baseUrl: string;
@@ -15,7 +15,7 @@ export class HttpClient {
   private tokenRefresher?: (staleToken: string) => Promise<string | null>;
 
   constructor(config: ResolvedConfig) {
-    this.baseUrl = (config.baseUrl || 'https://api.orbitnest.io').replace(/\/$/, '');
+    this.baseUrl = (config.baseUrl || 'https://api.nestcore.io').replace(/\/$/, '');
     this.apiKey = config.apiKey;
     this.projectSlug = config.projectSlug;
     this.timeout = config.timeout || 30000;
@@ -27,7 +27,7 @@ export class HttpClient {
     return this.projectSlug;
   }
 
-  /** Configured API origin (e.g. `https://api.orbitnest.io`) without trailing slash. */
+  /** Configured API origin (e.g. `https://api.nestcore.io`) without trailing slash. */
   getBaseUrl(): string {
     return this.baseUrl;
   }
@@ -124,7 +124,7 @@ export class HttpClient {
     return {
       apikey: this.apiKey,
       Authorization: `Bearer ${token || this.apiKey}`,
-      ...(this.clientIp ? { 'X-OrbitNest-Client-IP': this.clientIp } : {}),
+      ...(this.clientIp ? { 'X-NestCore-Client-IP': this.clientIp } : {}),
     };
   }
 
@@ -203,7 +203,7 @@ export function errorMessage(body: unknown, status: number, fallback?: string): 
 }
 
 /**
- * `jobs`, `env` and `logs` map to Studio-admin routes (admin JWT + project
+ * `jobs`, `env` and `logs` map to console-admin routes (admin JWT + project
  * UUID, owner only). A project anon/service key can never call them, so these
  * clients fail fast instead of sending a request that always 401s.
  */
@@ -212,8 +212,8 @@ export function adminOnlyError(feature: string): ApiError {
     data: null,
     error: {
       message:
-        `OrbitNest: ${feature} requires a Studio admin token and is not available with a project API key. ` +
-        'Manage it in OrbitNest Studio, the OrbitNest CLI or the MCP server.',
+        `NestCore: ${feature} requires a NestCore console admin token and is not available with a project API key. ` +
+        'Manage it in the NestCore console, the NestCore CLI or the MCP server.',
       code: 'ADMIN_ONLY',
     },
   };

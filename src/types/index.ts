@@ -2,10 +2,13 @@
 //
 // Only `apiKey` is required. The project slug is decoded from the JWT
 // payload of the API key (it carries `project_slug` as a claim), and
-// `baseUrl` defaults to https://api.orbitnest.io. Pass them explicitly
+// `baseUrl` defaults to https://api.nestcore.io. Pass them explicitly
 // only when you need to override (e.g. local dev pointing at a custom
 // API host).
-export interface OrbitNestConfig {
+/** @deprecated Renamed to {@link NestCoreConfig}. */
+export type OrbitNestConfig = NestCoreConfig;
+
+export interface NestCoreConfig {
   apiKey: string;
   projectSlug?: string;
   baseUrl?: string;
@@ -19,7 +22,7 @@ export interface OrbitNestConfig {
   migrationsDir?: string;
   /**
    * Server-side only: the end user's IP when your server calls auth for them
-   * (e.g. a Next.js server action). Sent as `X-OrbitNest-Client-IP` and honoured
+   * (e.g. a Next.js server action). Sent as `X-NestCore-Client-IP` and honoured
    * only with the service_role key, so each user gets their own throttle
    * bucket instead of sharing your server's. Create one client per request.
    */

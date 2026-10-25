@@ -33,7 +33,7 @@ export interface AiMessage {
 }
 
 export interface AiChatOptions {
-  /** Defaults to the project's default model (Studio → Project Settings → AI). */
+  /** Defaults to the project's default model (Console → Project Settings → AI). */
   model?: string;
   /** Needed only when the model name does not identify the provider. */
   provider?: AiProviderId;

@@ -15,7 +15,7 @@ export class DatabaseClient {
    *
    * Note: this path is intentionally **singular** (`/api/project/:slug/...`).
    * The plural form (`/api/projects/:projectId/...`) is reserved for the
-   * admin/Studio routes which authenticate with the global JWT_SECRET. The
+   * admin/console routes which authenticate with the global JWT_SECRET. The
    * client SDK uses a per-project anon/service key, so it must hit the
    * singular endpoint where `ApiKeyGuard` validates with the project's own
    * `jwt_secret`.
@@ -35,7 +35,7 @@ export class DatabaseClient {
    */
   /**
    * Rows nearest to `query` by meaning, from a column embedded with automatic
-   * embeddings (Studio → AI → Embeddings). Runs under RLS as the signed-in user.
+   * embeddings (Console → AI → Embeddings). Runs under RLS as the signed-in user.
    * Each row carries `_similarity` (cosine) and `_score`. With `hybridColumn`,
    * keyword matches on that text column are blended in (reciprocal rank fusion).
    * Usually reached through `db.from(table).eq(...).semantic(column, query)`.
@@ -349,7 +349,7 @@ class TableQueryBuilder {
 
   private ident(name: string): string {
     if (!SAFE_IDENT.test(name)) {
-      throw new Error(`OrbitNest: unsafe SQL identifier "${name}"`);
+      throw new Error(`NestCore: unsafe SQL identifier "${name}"`);
     }
     return `"${name}"`;
   }
@@ -384,7 +384,7 @@ class TableQueryBuilder {
     this.ident(column);
     const config = opts?.config ?? 'english';
     if (!SAFE_IDENT.test(config)) {
-      throw new Error(`OrbitNest: unsafe text-search config "${config}"`);
+      throw new Error(`NestCore: unsafe text-search config "${config}"`);
     }
     this._filters.push({ col: column, op: 'fts', value: query, ftsType: opts?.type ?? 'websearch', config });
     return this;
@@ -404,7 +404,7 @@ class TableQueryBuilder {
   nearest(column: string, vector: number[], opts?: { metric?: 'l2' | 'cosine' | 'ip'; limit?: number }): this {
     this.ident(column);
     if (!Array.isArray(vector) || !vector.every((n) => typeof n === 'number' && Number.isFinite(n))) {
-      throw new Error('OrbitNest: nearest() vector must be an array of finite numbers');
+      throw new Error('NestCore: nearest() vector must be an array of finite numbers');
     }
     const op = opts?.metric === 'cosine' ? '<=>' : opts?.metric === 'ip' ? '<#>' : '<->';
     this._vectorOrder = { col: column, vec: `[${vector.join(',')}]`, op };

@@ -1,7 +1,7 @@
 {
-  "name": "@orbitneststudio/js",
-  "version": "0.8.0",
-  "description": "OrbitNest JavaScript/TypeScript SDK for the browser — auth, database, query builder, storage, realtime, edge functions.",
+  "name": "@nestcore/js",
+  "version": "0.9.0",
+  "description": "NestCore JavaScript/TypeScript SDK for the browser — auth, database, query builder, storage, realtime, edge functions.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -28,7 +28,7 @@
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
-    "orbitnest",
+    "nestcore",
     "sdk",
     "browser",
     "supabase-alternative",
@@ -37,11 +37,11 @@
     "realtime",
     "backend-as-a-service"
   ],
-  "author": "OrbitNest",
+  "author": "NestCore",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Orbitnest/orbitnest_js.git"
+    "url": "git+https://github.com/Orbitnest/nestcore_js.git"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

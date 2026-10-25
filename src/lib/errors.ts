@@ -4,38 +4,43 @@ import type { ApiResult } from '../types';
  * Error thrown by {@link unwrap}. Carries the API error's `code` and HTTP
  * `status` so callers can branch on them — the throwing counterpart to the
  * `{ data, error }` result model (and a match for the Flutter SDK's
- * `OrbitNestException`).
+ * `NestCoreException`).
  */
-export class OrbitNestError extends Error {
+export class NestCoreError extends Error {
   readonly code?: string;
   readonly status?: number;
   constructor(message: string, opts: { code?: string; status?: number } = {}) {
     super(message);
-    this.name = 'OrbitNestError';
+    this.name = 'NestCoreError';
     this.code = opts.code;
     this.status = opts.status;
   }
 }
 
+/** @deprecated Renamed to {@link NestCoreError}; kept so existing `instanceof` checks keep working. */
+export const OrbitNestError = NestCoreError;
+/** @deprecated Renamed to {@link NestCoreError}. */
+export type OrbitNestError = NestCoreError;
+
 /**
  * Bridge the `{ data, error }` result model to a throwing style: returns
- * `data` on success, throws {@link OrbitNestError} on error. Lets you opt into
+ * `data` on success, throws {@link NestCoreError} on error. Lets you opt into
  * `try/catch` ergonomics (as the Flutter SDK uses) without changing the default
  * non-throwing behavior of the SDK.
  *
  * ```ts
- * import { unwrap } from '@orbitneststudio/js';
+ * import { unwrap } from '@nestcore/js';
  *
  * try {
- *   const { rows } = unwrap(await orbit.db.from('posts').select());
+ *   const { rows } = unwrap(await nestcore.db.from('posts').select());
  * } catch (e) {
- *   if (e instanceof OrbitNestError) console.error(e.code, e.status, e.message);
+ *   if (e instanceof NestCoreError) console.error(e.code, e.status, e.message);
  * }
  * ```
  */
 export function unwrap<T>(result: ApiResult<T>): T {
   if (result.error) {
-    throw new OrbitNestError(result.error.message, {
+    throw new NestCoreError(result.error.message, {
       code: result.error.code,
       status: result.error.status,
     });
@@ -45,7 +50,7 @@ export function unwrap<T>(result: ApiResult<T>): T {
 
 /**
  * `error.code` values for the project auth limits (all HTTP 429). The limits
- * are set per project in Studio → Settings → Auth Security.
+ * are set per project in Console → Settings → Auth Security.
  */
 export const AuthLimitCodes = {
   /** Too many wrong codes: codes are invalidated for a while. */

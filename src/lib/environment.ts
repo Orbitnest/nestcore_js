@@ -11,9 +11,9 @@ export interface EnvironmentVariable {
 }
 
 /**
- * @deprecated Not usable with a project API key: these routes need a Studio
+ * @deprecated Not usable with a project API key: these routes need a NestCore console
  * admin token. Every method resolves to an `ADMIN_ONLY` error without calling
- * the API. Use OrbitNest Studio, the CLI or the MCP server instead.
+ * the API. Use the NestCore console, the CLI or the MCP server instead.
  */
 export class EnvironmentClient {
   constructor(private client: HttpClient) {}

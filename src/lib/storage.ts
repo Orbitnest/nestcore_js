@@ -310,7 +310,7 @@ export class StorageBucket {
     // recoverable runtime error).
     const invalid = validatePath(path);
     if (invalid) {
-      throw new Error(`OrbitNest: ${invalid.error?.message ?? 'invalid storage path'}`);
+      throw new Error(`NestCore: ${invalid.error?.message ?? 'invalid storage path'}`);
     }
 
     const baseUrl = this.client.getBaseUrl();

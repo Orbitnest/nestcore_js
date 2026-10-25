@@ -32,7 +32,7 @@ export function createLocalStorageAdapter(): StorageAdapter {
     ls = typeof globalThis !== 'undefined' ? (globalThis as { localStorage?: Storage }).localStorage ?? null : null;
     // Probe — Safari private mode exposes localStorage but throws on write.
     if (ls) {
-      const probe = '__orbitnest_probe__';
+      const probe = '__nestcore_probe__';
       ls.setItem(probe, '1');
       ls.removeItem(probe);
     }
