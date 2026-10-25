@@ -234,7 +234,7 @@ const ts = await generateTypes(serverClient.db); // → string of TS interfaces 
 ## Browser support
 
 Targets ES2020 and any environment with `fetch`, `WebSocket`, `FormData`, and
-`Blob` (all modern browsers; Node 18+ for isomorphic use). No polyfills needed.
+`Blob` (all modern browsers; Node 22+ for isomorphic use). No polyfills needed.
 
 `@nestcore/node` vs `@nestcore/js`: the Node SDK additionally ships a
 filesystem-backed **migration runner**; the web SDK omits it (no filesystem in
